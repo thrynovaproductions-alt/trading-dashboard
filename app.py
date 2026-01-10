@@ -27,6 +27,8 @@ if not df.empty:
     # --- 2. INDICATOR CALCULATIONS ---
     df['SMA9'] = df['Close'].rolling(window=9).mean()
     df['SMA21'] = df['Close'].rolling(window=21).mean()
+    
+    # Bollinger Bands
     df['MB'] = df['Close'].rolling(window=20).mean()
     df['UB'] = df['MB'] + (df['Close'].rolling(window=20).std() * 2)
     df['LB'] = df['MB'] - (df['Close'].rolling(window=20).std() * 2)
@@ -41,24 +43,37 @@ if not df.empty:
     df['AvgVolume'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['AvgVolume']
 
+    # ATR (Average True Range) - Used for Risk Management
+    high_low = df['High'] - df['Low']
+    high_cp = abs(df['High'] - df['Close'].shift())
+    low_cp = abs(df['Low'] - df['Close'].shift())
+    df['TR'] = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
+    df['ATR'] = df['TR'].rolling(window=14).mean()
+
     # --- 3. ENHANCED ALERT LOGIC ---
     last = df.iloc[-1]
     prev = df.iloc[-2]
+    atr_val = last['ATR']
     
-    st.sidebar.subheader("Live Signals")
+    st.sidebar.subheader("Live Signals & Risk")
+    
     if last['SMA9'] > last['SMA21'] and prev['SMA9'] <= prev['SMA21']:
-        if last['RVOL'] > 1.5:
-            st.success(f"🔥 HIGH CONFIDENCE BUY: RVOL {last['RVOL']:.2f}")
-            st.toast("BULLISH CROSS + HIGH VOL", icon="🚀")
-        else:
-            st.info(f"⚖️ Low Volume Buy (RVOL: {last['RVOL']:.2f})")
+        sl = last['Close'] - (2 * atr_val)
+        tp = last['Close'] + (4 * atr_val)
+        st.success(f"🔥 BUY SIGNAL (RVOL: {last['RVOL']:.2f})")
+        st.sidebar.write(f"**Entry:** {last['Close']:.2f}")
+        st.sidebar.write(f"**Stop Loss:** {sl:.2f}")
+        st.sidebar.write(f"**Take Profit:** {tp:.2f}")
+        st.toast("BULLISH CROSSOVER!", icon="🚀")
             
     elif last['SMA9'] < last['SMA21'] and prev['SMA9'] >= prev['SMA21']:
-        if last['RVOL'] > 1.5:
-            st.error(f"💥 HIGH CONFIDENCE SELL: RVOL {last['RVOL']:.2f}")
-            st.toast("BEARISH CROSS + HIGH VOL", icon="🔻")
-        else:
-            st.warning(f"⚖️ Low Volume Sell (RVOL: {last['RVOL']:.2f})")
+        sl = last['Close'] + (2 * atr_val)
+        tp = last['Close'] - (4 * atr_val)
+        st.error(f"💥 SELL SIGNAL (RVOL: {last['RVOL']:.2f})")
+        st.sidebar.write(f"**Entry:** {last['Close']:.2f}")
+        st.sidebar.write(f"**Stop Loss:** {sl:.2f}")
+        st.sidebar.write(f"**Take Profit:** {tp:.2f}")
+        st.toast("BEARISH CROSSOVER!", icon="🔻")
 
     # --- 4. MULTI-ROW CHART ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
@@ -70,7 +85,6 @@ if not df.empty:
     fig.add_trace(go.Scatter(x=df.index, y=df['UB'], line=dict(color='gray', dash='dot'), name="Upper Band"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['LB'], line=dict(color='gray', dash='dot'), name="Lower Band"), row=1, col=1)
 
-    # Volume & RSI
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color='blue'), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name="RSI"), row=3, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
@@ -83,8 +97,8 @@ if not df.empty:
     st.divider()
     obs = st.text_input("AI Logic Check: What do you see on the chart?")
     if st.button("Run Analysis"):
-        context = f"Market: {target}, Price: {last['Close']:.2f}, RSI: {last['RSI']:.1f}, RVOL: {last['RVOL']:.2f}."
-        resp = model.generate_content(f"Act as a professional trader. Analyze this setup: {context}. User observation: {obs}")
+        context = f"Market: {target}, Price: {last['Close']:.2f}, RSI: {last['RSI']:.1f}, ATR: {atr_val:.2f}."
+        resp = model.generate_content(f"Analyze this trade setup: {context}. User observation: {obs}")
         st.write(resp.text)
 else:
     st.error("Awaiting Market Data...")
