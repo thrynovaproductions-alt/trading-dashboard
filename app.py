@@ -7,18 +7,20 @@ import google.generativeai as genai
 
 st.set_page_config(layout="wide", page_title="AI Trading Terminal")
 
-# --- 1. AI Setup ---
+# --- 1. AI Setup with Search Tool ---
 try:
-    # We enable the 'google_search' tool in the model configuration
+    # Use the key you just saved in Secrets
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    
+    # We use 'gemini-1.5-flash' and enable the google_search tool
     model = genai.GenerativeModel(
         model_name='gemini-1.5-flash',
         tools=[{"google_search": {}}] 
     )
-except:
-    st.error("Check Streamlit Secrets for GEMINI_API_KEY.")
+except Exception as e:
+    st.error(f"AI Setup Error: {e}")
 
-st.title("🚀 NQ & ES Decision Support System (AI + News)")
+st.title("🚀 NQ & ES Decision Support System")
 
 # Sidebar
 target = st.sidebar.selectbox("Market", ["NQ=F", "ES=F"])
@@ -35,7 +37,7 @@ if not df.empty:
     df['UB'] = df['MB'] + (df['Close'].rolling(window=20).std() * 2)
     df['LB'] = df['MB'] - (df['Close'].rolling(window=20).std() * 2)
 
-    # RSI & Volume
+    # RSI & RVOL
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -43,14 +45,14 @@ if not df.empty:
     df['AvgVolume'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['AvgVolume']
     
-    # ATR for Risk
+    # ATR for Risk management
     high_low = df['High'] - df['Low']
     high_cp = abs(df['High'] - df['Close'].shift())
     low_cp = abs(df['Low'] - df['Close'].shift())
     df['TR'] = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
     df['ATR'] = df['TR'].rolling(window=14).mean()
 
-    # --- 3. SIDEBAR ALERTS & ATR RISK ---
+    # --- 3. LIVE SIGNALS & RISK MATH ---
     last = df.iloc[-1]
     prev = df.iloc[-2]
     atr_val = last['ATR']
@@ -64,42 +66,39 @@ if not df.empty:
         st.error(f"💥 SELL: Entry {last['Close']:.2f} | SL {sl:.2f} | TP {tp:.2f}")
 
     # --- 4. THE CHART ---
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                        row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
+    
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA9'], line=dict(color='yellow', width=1), name="SMA 9"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA21'], line=dict(color='orange', width=1), name="SMA 21"), row=1, col=1)
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume"), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name="RSI"), row=3, col=1)
+    
     fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 5. AI "EYES" + LIVE NEWS SENTIMENT ---
+    # --- 5. AI FULL SCAN (Chart Data + Live News) ---
     st.divider()
-    st.subheader("🤖 AI Full Spectrum Analysis")
-    obs = st.text_input("Anything specific to focus on?")
+    st.subheader("🤖 AI Market Intelligence")
+    user_note = st.text_input("Focus on anything specific? (e.g. 'Check for news on interest rates')")
     
-    if st.button("Analyze Charts + Live Market News"):
+    if st.button("Analyze Charts + Live 2026 News"):
+        # Send last 30 candles for "Vision"
         recent_data = df.tail(30)[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'RVOL']]
-        data_to_send = recent_data.to_string()
         
-        with st.spinner('AI is analyzing charts and scanning global 2026 news...'):
+        with st.spinner('AI is reading the chart and scanning global news for today...'):
             prompt = f"""
             TODAY'S DATE: January 10, 2026.
-            MARKET: {target}
-            CURRENT PRICE: {last['Close']:.2f}
+            ANALYZING: {target} at {last['Close']:.2f}
             
-            PART 1: DATA ANALYSIS
-            Examine these last 30 intervals:
-            {data_to_send}
+            1. TECH ANALYSIS: Look at the last 30 intervals of data:
+            {recent_data.to_string()}
             
-            PART 2: LIVE NEWS SEARCH
-            Use your search tool to find the latest news for "{target}" and "US Stock Market" for today. 
-            Identify if there are any FOMC reports, CPI data, or major tech earnings affecting sentiment.
+            2. NEWS SEARCH: Search for today's live news regarding {target} and the US Stock Market.
             
-            PART 3: FINAL VERDICT
-            Combine the technical data with the news sentiment. 
-            Provide a Risk Score (1-10) and a final trade recommendation.
-            User Note: {obs}
+            3. VERDICT: Combine the technicals and news. Give me a Risk/Reward rating (1-10) 
+            and a clear 'Trade or Wait' suggestion based on user note: {user_note}
             """
             response = model.generate_content(prompt)
             st.markdown(response.text)
