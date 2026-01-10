@@ -1,18 +1,17 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import google.generativeai as genai
+from datetime import datetime
 
 # --- 1. CORE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="AI Trading Terminal")
 
 try:
-    # Safely retrieve key from Streamlit Secrets
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    
-    # Enable Google Search grounding specifically for Gemini 1.5 models
     model = genai.GenerativeModel(
         model_name='gemini-1.5-flash',
         tools=[{"google_search_retrieval": {}}] 
@@ -20,93 +19,81 @@ try:
 except Exception as e:
     st.error(f"AI Setup Error: {e}")
 
-st.title("📊 NQ & ES Decision Support System")
+st.title("🚀 NQ & ES Quant Workstation")
 
-# Sidebar for Market Selection
-target = st.sidebar.selectbox("Select Market", ["NQ=F", "ES=F"])
-period = st.sidebar.selectbox("Period", ["1d", "5d"])
+# Sidebar
+target = st.sidebar.selectbox("Market Asset", ["NQ=F", "ES=F"])
+main_interval = "5m"
 
-# --- 2. DATA PROCESSING ---
-with st.spinner('Updating live market feed...'):
-    # Fetching futures data
-    df = yf.download(target, period=period, interval="5m", multi_level_index=False)
+# --- 2. MULTI-TIMEFRAME TREND MATRIX ---
+def get_trend(symbol, interval, period):
+    data = yf.download(symbol, period=period, interval=interval, progress=False, multi_level_index=False)
+    if len(data) < 20: return "Neutral ⚪"
+    sma_short = data['Close'].rolling(9).mean().iloc[-1]
+    sma_long = data['Close'].rolling(21).mean().iloc[-1]
+    return "BULLISH 🟢" if sma_short > sma_long else "BEARISH 🔴"
+
+st.sidebar.subheader("Multi-Timeframe Trend")
+matrix_1h = get_trend(target, "1h", "5d")
+matrix_1d = get_trend(target, "1d", "1mo")
+st.sidebar.write(f"1-Hour: {matrix_1h}")
+st.sidebar.write(f"Daily: {matrix_1d}")
+
+# --- 3. MAIN DATA PROCESSING ---
+df = yf.download(target, period="2d", interval=main_interval, multi_level_index=False)
 
 if not df.empty:
-    # Technical Indicator Calculations
-    df['SMA9'] = df['Close'].rolling(window=9).mean()
-    df['SMA21'] = df['Close'].rolling(window=21).mean()
+    df['SMA9'] = df['Close'].rolling(9).mean()
+    df['SMA21'] = df['Close'].rolling(21).mean()
+    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (df['Typical_Price'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     
-    # RSI & RVOL Logic
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-    df['AvgVolume'] = df['Volume'].rolling(window=20).mean()
-    df['RVOL'] = df['Volume'] / df['AvgVolume']
-    
-    # ATR for Volatility-Adjusted Risk
-    high_low = df['High'] - df['Low']
-    high_cp = abs(df['High'] - df['Close'].shift())
-    low_cp = abs(df['Low'] - df['Close'].shift())
-    df['TR'] = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
-    df['ATR'] = df['TR'].rolling(window=14).mean()
+    df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
+    df['ATR'] = (pd.concat([df['High']-df['Low'], abs(df['High']-df['Close'].shift()), abs(df['Low']-df['Close'].shift())], axis=1).max(axis=1)).rolling(14).mean()
 
-    # --- 3. LIVE SIGNALS ---
+    # --- 4. SIGNALS & CHART ---
     last, prev = df.iloc[-1], df.iloc[-2]
-    atr_val = last['ATR']
-    
-    st.sidebar.subheader("Live Analysis & Risk")
-    if last['SMA9'] > last['SMA21'] and prev['SMA9'] <= prev['SMA21']:
-        sl, tp = last['Close'] - (2 * atr_val), last['Close'] + (4 * atr_val)
-        st.success(f"🔥 BUY: Entry {last['Close']:.2f} | SL {sl:.2f} | TP {tp:.2f}")
-    elif last['SMA9'] < last['SMA21'] and prev['SMA9'] >= prev['SMA21']:
-        sl, tp = last['Close'] + (2 * atr_val), last['Close'] - (4 * atr_val)
-        st.error(f"💥 SELL: Entry {last['Close']:.2f} | SL {sl:.2f} | TP {tp:.2f}")
-
-    # --- 4. DATA VISUALIZATION ---
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                        row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
-
-    # Main Candlestick Chart
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA9'], line=dict(color='yellow', width=1), name="SMA 9"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA21'], line=dict(color='orange', width=1), name="SMA 21"), row=1, col=1)
-
-    # Volume & RSI Panels
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color='blue'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name="RSI"), row=3, col=1)
-    
-    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
+    fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', width=2, dash='dash'), name="VWAP"), row=1, col=1)
+    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 5. AI "FULL SCAN" ANALYSIS (NEWS + DATA) ---
+    # --- 5. AI AGENT & EXPORT ---
     st.divider()
-    st.subheader("🤖 AI Data & Sentiment Scan")
-    obs = st.text_input("Looking for something specific? (e.g. 'Is today's economic report moving the market?')")
+    st.subheader("🤖 AI Technical & News Grounding")
+    user_query = st.text_input("Ask about specific news or patterns:")
     
-    if st.button("Run Professional Analysis"):
-        # Sending chart data to provide ground context for the AI
-        recent_data = df.tail(30)[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'RVOL']]
-        
-        with st.spinner('AI is correlating 30-candle data with live 2026 news...'):
-            prompt = f"""
-            TODAY'S DATE: January 10, 2026. 
-            MARKET: {target}
-            PRICE: {last['Close']:.2f}
-            
-            1. TECHNICAL CONTEXT (Last 30 Intervals):
-            {recent_data.to_string()}
-            
-            2. NEWS SEARCH TASK:
-            Search for the latest live news headlines for {target} and the general US Stock Market for TODAY, January 10, 2026. 
-            Look specifically for FOMC announcements, earnings, inflation data, or significant geopolitical shifts.
-            
-            3. VERDICT:
-            Analyze if technical trends match current news sentiment. Provide a 'Confidence Score' (1-10) for trading this setup.
-            User Note: {obs}
-            """
-            # AI uses search tool automatically to ground its response
+    if st.button("Generate Full Market Verdict"):
+        recent_data = df.tail(10)[['Close', 'RSI', 'VWAP', 'RVOL']]
+        with st.spinner('AI Researching...'):
+            prompt = f"Analyze {target} for Jan 10, 2026. Data: {recent_data.to_string()}. 1H: {matrix_1h}. Search live news for today and give a verdict."
             response = model.generate_content(prompt)
-            st.markdown(response.text)
+            verdict_text = response.text
+            st.markdown(verdict_text)
+            
+            # Create Journal Entry
+            journal_entry = f"""
+            --- TRADING JOURNAL ENTRY ---
+            Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            Market: {target} | Price: {last['Close']:.2f}
+            1H Trend: {matrix_1h} | Daily Trend: {matrix_1d}
+            RSI: {last['RSI']:.2f} | RVOL: {last['RVOL']:.2f}
+            
+            AI VERDICT:
+            {verdict_text}
+            """
+            
+            # DOWNLOAD BUTTON
+            st.download_button(
+                label="📁 Save to Trading Journal",
+                data=journal_entry,
+                file_name=f"Trade_Journal_{target}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                mime="text/plain"
+            )
 else:
-    st.error("Waiting for data stream... check your internet connection.")
+    st.warning("Market closed or data unavailable.")
