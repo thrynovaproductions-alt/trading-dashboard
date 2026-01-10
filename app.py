@@ -3,52 +3,77 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import google.generativeai as genai
 
-st.set_page_config(layout="wide")
-st.title("🚀 Advanced NQ/ES Dashboard")
+st.set_page_config(layout="wide", page_title="AI Trading Terminal")
 
-target = st.sidebar.selectbox("Market", ["NQ=F", "ES=F"])
-df = yf.download(target, period="1d", interval="5m", multi_level_index=False)
+# --- AI Setup ---
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except:
+    st.error("API Key error. Check Secrets.")
+
+st.title("📊 NQ & ES Decision Support System")
+
+# Sidebar
+target = st.sidebar.selectbox("Select Market", ["NQ=F", "ES=F"])
+period = st.sidebar.selectbox("Period", ["1d", "5d"])
+
+# Data Fetch
+df = yf.download(target, period=period, interval="5m", multi_level_index=False)
 
 if not df.empty:
-    # --- 1. TECHNICAL MATH ---
-    # SMA 9 & 21
+    # 1. Indicator Calculations
     df['SMA9'] = df['Close'].rolling(window=9).mean()
     df['SMA21'] = df['Close'].rolling(window=21).mean()
-    
-    # Bollinger Bands
     df['MB'] = df['Close'].rolling(window=20).mean()
     df['UB'] = df['MB'] + (df['Close'].rolling(window=20).std() * 2)
     df['LB'] = df['MB'] - (df['Close'].rolling(window=20).std() * 2)
 
-    # RSI (14)
+    # 2. RSI Calculation
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
-    # --- 2. THE MULTI-CHART ---
-    # Create 3 rows: Main Chart, Volume, RSI
+    # 3. Alert Logic
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    if last['SMA9'] > last['SMA21'] and prev['SMA9'] <= prev['SMA21']:
+        st.toast("BULLISH CROSSOVER!", icon="🚀")
+        st.success(f"Trade Suggestion: Potential LONG at {last['Close']:.2f}")
+    elif last['SMA9'] < last['SMA21'] and prev['SMA9'] >= prev['SMA21']:
+        st.toast("BEARISH CROSSOVER!", icon="🔻")
+        st.error(f"Trade Suggestion: Potential SHORT at {last['Close']:.2f}")
+
+    # 4. Multi-Row Chart Layout
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
+                        row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
 
-    # Candlestick + SMA + Bollinger
+    # Main Candlestick + SMA + Bollinger
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA9'], line=dict(color='yellow', width=1), name="SMA 9"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA21'], line=dict(color='orange', width=1), name="SMA 21"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['UB'], line=dict(color='gray', dash='dash'), name="Upper Band"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['LB'], line=dict(color='gray', dash='dash'), name="Lower Band"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['UB'], line=dict(color='gray', dash='dot'), name="Bollinger Upper"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['LB'], line=dict(color='gray', dash='dot'), name="Bollinger Lower"), row=1, col=1)
 
     # Volume
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color='blue'), row=2, col=1)
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume"), row=2, col=1)
 
     # RSI
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name="RSI"), row=3, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
-    fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
 
     fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-st.info("💡 Strategy: Look for SMA Crossovers confirmed by a Volume spike.")
+    # 5. AI Assistant
+    st.subheader("🤖 AI Market Logic Check")
+    obs = st.text_input("What are you seeing?")
+    if st.button("Analyze"):
+        context = f"Market: {target}, Price: {last['Close']:.2f}, RSI: {last['RSI']:.1f}. User sees: {obs}"
+        resp = model.generate_content(f"Analyze this trade setup for a futures trader: {context}")
+        st.write(resp.text)
