@@ -2,63 +2,53 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.io as pio
-import google.generativeai as genai
+from plotly.subplots import make_subplots
 
-# Fix for the Plotly dark theme error
-pio.templates.default = "plotly"
+st.set_page_config(layout="wide")
+st.title("🚀 Advanced NQ/ES Dashboard")
 
-st.set_page_config(page_title="Futures AI Terminal", layout="wide")
-
-# --- AI Configuration ---
-try:
-    # Connects to the key you just saved in Secrets
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    st.warning("AI Key not found. Please check your Streamlit Secrets.")
-
-st.title("📈 NQ & ES Trading Command Center")
-
-# Sidebar
-target = st.sidebar.selectbox("Select Future", ["NQ=F", "ES=F"])
-period = st.sidebar.selectbox("Period", ["1d", "5d", "1mo"])
-
-# Fetch Live Data
-with st.spinner('Fetching market data...'):
-    df = yf.download(target, period=period, interval="5m", multi_level_index=False)
+target = st.sidebar.selectbox("Market", ["NQ=F", "ES=F"])
+df = yf.download(target, period="1d", interval="5m", multi_level_index=False)
 
 if not df.empty:
-    # Top Row Metrics
-    last_price = df['Close'].iloc[-1]
-    prev_close = df['Open'].iloc[0]
-    change = last_price - prev_close
-    pct_change = (change / prev_close) * 100
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Last Price", f"{last_price:,.2f}")
-    c2.metric("Net Change", f"{change:,.2f}", delta=f"{pct_change:.2f}%")
-    c3.metric("Status", "MARKET ACTIVE")
-
-    # Interactive Chart
-    fig = go.Figure(data=[go.Candlestick(
-        x=df.index,
-        open=df['Open'], high=df['High'],
-        low=df['Low'], close=df['Close']
-    )])
-    # Simplified layout to prevent crashes
-    fig.update_layout(xaxis_rangeslider_visible=False, height=500)
-    st.plotly_chart(fig, use_container_width=True, theme="streamlit")
-
-    # --- AI STRATEGY ASSISTANT ---
-    st.divider()
-    st.subheader("🤖 AI Market Analysis")
-    user_input = st.text_area("Your Observation:", placeholder="e.g., 'Price is hitting a 3-day high. What do you see?'")
+    # --- 1. TECHNICAL MATH ---
+    # SMA 9 & 21
+    df['SMA9'] = df['Close'].rolling(window=9).mean()
+    df['SMA21'] = df['Close'].rolling(window=21).mean()
     
-    if st.button("Generate Strategy"):
-        market_context = f"The current price of {target} is {last_price:,.2f}. The user says: {user_input}"
-        with st.spinner('AI is thinking...'):
-            response = model.generate_content(f"Act as a professional futures trader. Analyze this: {market_context}")
-            st.write(response.text)
-else:
-    st.error("Waiting for data feed...")
+    # Bollinger Bands
+    df['MB'] = df['Close'].rolling(window=20).mean()
+    df['UB'] = df['MB'] + (df['Close'].rolling(window=20).std() * 2)
+    df['LB'] = df['MB'] - (df['Close'].rolling(window=20).std() * 2)
+
+    # RSI (14)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # --- 2. THE MULTI-CHART ---
+    # Create 3 rows: Main Chart, Volume, RSI
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
+
+    # Candlestick + SMA + Bollinger
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['SMA9'], line=dict(color='yellow', width=1), name="SMA 9"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['SMA21'], line=dict(color='orange', width=1), name="SMA 21"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['UB'], line=dict(color='gray', dash='dash'), name="Upper Band"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['LB'], line=dict(color='gray', dash='dash'), name="Lower Band"), row=1, col=1)
+
+    # Volume
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color='blue'), row=2, col=1)
+
+    # RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name="RSI"), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
+
+    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+st.info("💡 Strategy: Look for SMA Crossovers confirmed by a Volume spike.")
