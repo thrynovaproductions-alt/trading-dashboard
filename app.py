@@ -12,7 +12,7 @@ try:
     # Safely retrieve key from Streamlit Secrets
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     
-    # FIXED: Using 'google_search_retrieval' for Gemini 1.5
+    # Enable Google Search grounding specifically for Gemini 1.5 models
     model = genai.GenerativeModel(
         model_name='gemini-1.5-flash',
         tools=[{"google_search_retrieval": {}}] 
@@ -28,6 +28,7 @@ period = st.sidebar.selectbox("Period", ["1d", "5d"])
 
 # --- 2. DATA PROCESSING ---
 with st.spinner('Updating live market feed...'):
+    # Fetching futures data
     df = yf.download(target, period=period, interval="5m", multi_level_index=False)
 
 if not df.empty:
@@ -78,18 +79,18 @@ if not df.empty:
     fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 5. AI "FULL SCAN" ANALYSIS ---
+    # --- 5. AI "FULL SCAN" ANALYSIS (NEWS + DATA) ---
     st.divider()
     st.subheader("🤖 AI Data & Sentiment Scan")
-    obs = st.text_input("Looking for something specific? (e.g. 'How is inflation data affecting this?')")
+    obs = st.text_input("Looking for something specific? (e.g. 'Is today's economic report moving the market?')")
     
     if st.button("Run Professional Analysis"):
-        # Send 30 candles of context to the AI
+        # Sending chart data to provide ground context for the AI
         recent_data = df.tail(30)[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'RVOL']]
         
-        with st.spinner('The AI is correlating 30-candle data with live 2026 news...'):
+        with st.spinner('AI is correlating 30-candle data with live 2026 news...'):
             prompt = f"""
-            TODAY: January 10, 2026. 
+            TODAY'S DATE: January 10, 2026. 
             MARKET: {target}
             PRICE: {last['Close']:.2f}
             
@@ -97,13 +98,14 @@ if not df.empty:
             {recent_data.to_string()}
             
             2. NEWS SEARCH TASK:
-            Search for the latest live news headlines for {target} and the US Market for TODAY. 
-            Look for interest rate rumors, earnings, or geopolitical shifts.
+            Search for the latest live news headlines for {target} and the general US Stock Market for TODAY, January 10, 2026. 
+            Look specifically for FOMC announcements, earnings, inflation data, or significant geopolitical shifts.
             
             3. VERDICT:
-            Correlate technicals with news. Provide a 1-10 Confidence Score. 
-            Note: {obs}
+            Analyze if technical trends match current news sentiment. Provide a 'Confidence Score' (1-10) for trading this setup.
+            User Note: {obs}
             """
+            # AI uses search tool automatically to ground its response
             response = model.generate_content(prompt)
             st.markdown(response.text)
 else:
