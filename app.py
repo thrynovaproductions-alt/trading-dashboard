@@ -77,3 +77,15 @@ if not df.empty:
         context = f"Market: {target}, Price: {last['Close']:.2f}, RSI: {last['RSI']:.1f}. User sees: {obs}"
         resp = model.generate_content(f"Analyze this trade setup for a futures trader: {context}")
         st.write(resp.text)
+        # --- ADVANCED VOLUME FILTER ---
+# Calculate the average volume of the last 20 candles
+df['AvgVolume'] = df['Volume'].rolling(window=20).mean()
+df['RVOL'] = df['Volume'] / df['AvgVolume'] # Relative Volume ratio
+
+# --- ENHANCED ALERT LOGIC ---
+if last['SMA9'] > last['SMA21'] and prev['SMA9'] <= prev['SMA21']:
+    if last['RVOL'] > 1.5:
+        st.success(f"🔥 HIGH CONFIDENCE BUY: Crossover + High Volume (RVOL: {last['RVOL']:.2f})")
+    else:
+        st.info(f"⚖️ Weak Buy Signal: Crossover detected but Volume is low (RVOL: {last['RVOL']:.2f})")
+
