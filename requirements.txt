@@ -1,5 +1,2 @@
-streamlit
-yfinance
-pandas
-plotly
-google-generativeai
+pip uninstall google-generativeai
+pip install google-genai
