@@ -104,17 +104,19 @@ with col1:
         try:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             
-            # --- AUTO-FALLBACK MODEL LOGIC ---
-            # Try Gemini 3 Flash first, fallback to 2.5 if needed
+            # --- UPDATED GOOGLE SEARCH TOOL NAME ---
+            tools = [{"google_search": {}}]
+            
+            # Fallback model logic
             model_to_use = "gemini-3-flash-preview" 
             try:
-                model = genai.GenerativeModel(model_name=model_to_use, tools=[{"google_search_retrieval": {}}])
-                prompt = f"Analyze {target} for Jan 11, 2026. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
+                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
                 response_text = model.generate_content(prompt).text
             except Exception:
                 model_to_use = "gemini-2.5-flash"
-                model = genai.GenerativeModel(model_name=model_to_use, tools=[{"google_search_retrieval": {}}])
-                prompt = f"Analyze {target} for Jan 11, 2026. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
+                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
                 response_text = model.generate_content(prompt).text
             
             st.session_state['ai_verdict'] = response_text
