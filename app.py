@@ -71,7 +71,6 @@ def monitor_market():
         last_price = last_row['Close']
         curr_time = datetime.now().strftime("%H:%M:%S")
         
-        # Alerts logic (Crossover & Price)
         if prev_row['SMA9'] <= prev_row['SMA21'] and last_row['SMA9'] > last_row['SMA21']:
             if "BULLISH" in matrix_1h:
                 fire_notification("🔥 CONFIRMED BUY", f"{target} at {last_price:.2f}")
@@ -87,7 +86,7 @@ def monitor_market():
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        return last_price # Pass price to AI section
+        return last_price
     return None
 
 last_market_price = monitor_market()
@@ -96,8 +95,7 @@ last_market_price = monitor_market()
 st.divider()
 st.subheader("📓 Trading Journal & AI Analysis")
 
-# Journal Input Area
-trade_notes = st.text_area("Trading Notes (Enter strategy observations, mood, or entry reason):", placeholder="e.g., Price rejected VWAP, RSI oversold...")
+trade_notes = st.text_area("Trading Notes:", placeholder="e.g., Price rejected VWAP...")
 
 col1, col2 = st.columns(2)
 
@@ -105,17 +103,26 @@ with col1:
     if st.button("Generate AI Market Verdict", use_container_width=True):
         try:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            model = genai.GenerativeModel(model_name='gemini-1.5-flash', tools=[{"google_search_retrieval": {}}])
-            with st.spinner('Scanning Macro News...'):
-                prompt = f"Analyze {target} for Jan 10, 2026. 1H: {matrix_1h}. Daily: {matrix_1d}. User Notes: {trade_notes}. Verdict?"
+            
+            # --- AUTO-FALLBACK MODEL LOGIC ---
+            # Try Gemini 3 Flash first, fallback to 2.5 if needed
+            model_to_use = "gemini-3-flash-preview" 
+            try:
+                model = genai.GenerativeModel(model_name=model_to_use, tools=[{"google_search_retrieval": {}}])
+                prompt = f"Analyze {target} for Jan 11, 2026. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
                 response_text = model.generate_content(prompt).text
-                st.session_state['ai_verdict'] = response_text
-                st.markdown(response_text)
+            except Exception:
+                model_to_use = "gemini-2.5-flash"
+                model = genai.GenerativeModel(model_name=model_to_use, tools=[{"google_search_retrieval": {}}])
+                prompt = f"Analyze {target} for Jan 11, 2026. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                response_text = model.generate_content(prompt).text
+            
+            st.session_state['ai_verdict'] = response_text
+            st.markdown(response_text)
         except Exception as e:
             st.error(f"AI Setup Error: {e}")
 
 with col2:
-    # Build the Journal Content
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verdict_content = st.session_state.get('ai_verdict', "No AI Verdict generated yet.")
     
@@ -135,7 +142,6 @@ AI VERDICT:
 {verdict_content}
 -----------------
 """
-    # Log Book Download Button
     st.download_button(
         label="📁 Download Trading Log",
         data=log_content,
