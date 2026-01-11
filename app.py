@@ -11,11 +11,10 @@ import streamlit.components.v1 as components
 st.set_page_config(
     layout="wide", 
     page_title="AI Trading Terminal",
-    initial_sidebar_state="collapsed" # Better for mobile
+    initial_sidebar_state="collapsed" 
 )
 
-# --- 2. PWA INJECTION (MOVED AFTER CONFIG) ---
-# This registers the service worker and manifest for "Install" functionality
+# --- 2. PWA INJECTION ---
 components.html(
     """
     <script>
@@ -49,7 +48,7 @@ st.title("🚀 NQ & ES Quant Workstation")
 target = st.sidebar.selectbox("Market Asset", ["NQ=F", "ES=F"])
 st.sidebar.divider()
 
-# --- TREND MATRIX (Preserved Gains) ---
+# --- TREND MATRIX ---
 def get_trend(symbol, interval, period):
     data = yf.download(symbol, period=period, interval=interval, progress=False, multi_level_index=False)
     if len(data) < 20: return "Neutral ⚪"
@@ -75,7 +74,7 @@ if not df.empty:
     df['VWAP'] = (df['Typical_Price'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['ATR'] = (pd.concat([df['High']-df['Low'], abs(df['High']-df['Close'].shift()), abs(df['Low']-df['Close'].shift())], axis=1).max(axis=1)).rolling(14).mean()
 
-    # --- 5. BACKTEST LAB (Mobile-Friendly) ---
+    # --- 5. BACKTEST LAB ---
     st.sidebar.subheader("📊 Backtest & Optimizer Lab")
     if st.sidebar.button("Run Optimizer + Backtest", use_container_width=True):
         df['Signal'] = np.where((df['SMA9'] > df['SMA21']) & (df['Close'] > df['VWAP']), 1, 0)
@@ -91,21 +90,34 @@ if not df.empty:
         fig_bt.update_layout(height=300, template="plotly_dark")
         st.plotly_chart(fig_bt, use_container_width=True)
 
-    # --- 6. MAIN CHART ---
+    # --- 6. PUSH NOTIFICATION PERMISSION ---
+    st.sidebar.subheader("🔔 Alerts")
+    if st.sidebar.button("Enable Mobile Alerts", use_container_width=True):
+        components.html(
+            """
+            <script>
+            Notification.requestPermission().then(function(permission) {
+                if (permission === 'granted') {
+                    alert('Notifications Enabled!');
+                } else {
+                    alert('Permission denied. Please check phone settings.');
+                }
+            });
+            </script>
+            """,
+            height=0,
+        )
+
+    # --- 7. MAIN CHART ---
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"), row=1, col=1)
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color='blue'), row=2, col=1)
 
-    fig.update_layout(
-        height=500, # Balanced for mobile and desktop
-        template="plotly_dark", 
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=0, r=0, t=20, b=0)
-    )
+    fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 7. AI SECTION ---
+    # --- 8. AI SECTION ---
     st.divider()
     if st.button("Analyze Current Setup", use_container_width=True):
         with st.spinner('Checking 2026 Live Market News...'):
