@@ -105,7 +105,7 @@ def monitor_market():
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- PREPARE MOMENTUM DATA FOR AI ---
+        # MOMENTUM DATA FOR AI
         momentum_df = df.tail(10)[['Open', 'High', 'Low', 'Close']]
         momentum_summary = momentum_df.to_string()
         
@@ -114,10 +114,16 @@ def monitor_market():
 
 last_market_price, momentum_data = monitor_market()
 
-# --- 6. AI SECTION & LOG BOOK ---
+# --- 6. AI SECTION & NEWS ARCHIVE LOG BOOK ---
 st.divider()
-st.subheader("📓 Trading Journal & AI Analysis")
-trade_notes = st.text_area("Trading Notes:", placeholder="e.g., Price rejected VWAP...")
+st.subheader("📓 News Impact Archive & AI Analysis")
+
+# Pre-filled Headlines for tonight's session
+default_headlines = """- FED: Jerome Powell criminal investigation confirmed by DOJ (Jan 11)
+- TARIFFS: Supreme Court declines immediate ruling; administration explores alternative levers.
+- MACRO: 2026 'Year of the Bubble' warnings from major analysts."""
+
+trade_notes = st.text_area("Trading Notes & Headline Context:", value=default_headlines, height=150)
 
 col1, col2 = st.columns(2)
 
@@ -129,25 +135,19 @@ with col1:
                 search_tool = types.Tool(google_search=types.GoogleSearch())
                 config = types.GenerateContentConfig(tools=[search_tool])
                 
-                with st.spinner('Analyzing Momentum & Macro News...'):
-                    # Prompt updated to include OHLC table
+                with st.spinner('Analyzing Momentum vs. Headlines...'):
                     prompt = f"""
                     Analyze {target} for {datetime.now().strftime('%b %d, %Y')}.
                     
-                    CURRENT CONTEXT:
-                    - 1-Hour Trend: {matrix_1h}
-                    - Last Price: {last_market_price}
-                    
-                    RECENT MOMENTUM (Last 10 Candles OHLC):
-                    {momentum_data}
-                    
-                    USER OBSERVATIONS:
+                    HEADLINE NEWS ARCHIVE:
                     {trade_notes}
                     
+                    MOMENTUM (Last 10 Candles):
+                    {momentum_data}
+                    
                     TASK:
-                    1. Evaluate recent momentum vs the 1H trend.
-                    2. Check for breaking macro news (tariffs, Powell investigation).
-                    3. Provide a 'Verdict' and 'Confidence Level'.
+                    Verify if the current price momentum aligns with the gravity of these news events.
+                    Provide a specific risk-rating (Low, Med, High) for this trade setup.
                     """
                     
                     response = client.models.generate_content(
@@ -160,19 +160,31 @@ with col1:
                     st.markdown(response.text)
             except Exception as e:
                 st.error(f"AI Setup Error: {e}")
-        else:
-            st.warning("Awaiting market data to analyze momentum.")
 
 with col2:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verdict_content = st.session_state.get('ai_verdict', "No AI Verdict generated yet.")
     
-    log_content = f"TIMESTAMP: {timestamp}\nASSET: {target}\nPRICE: {last_market_price}\nMOMENTUM DATA:\n{momentum_data}\nNOTES: {trade_notes}\nAI VERDICT: {verdict_content}"
-    
+    log_content = f"""
+=========================================
+TRADING SESSION LOG: {timestamp}
+=========================================
+ASSET: {target} | PRICE: {last_market_price}
+-----------------------------------------
+NEWS HEADLINES ARCHIVE:
+{trade_notes}
+-----------------------------------------
+MOMENTUM SNAPSHOT:
+{momentum_data}
+-----------------------------------------
+AI ANALYSIS VERDICT:
+{verdict_content}
+=========================================
+"""
     st.download_button(
-        label="📁 Download Trading Log",
+        label="📁 Download Complete Trade Log",
         data=log_content,
-        file_name=f"Trade_Log_{target}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+        file_name=f"QuantLog_{target}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
         mime="text/plain",
         use_container_width=True
     )
