@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-# --- NEW 2026 SDK IMPORTS ---
 from google import genai
 from google.genai import types
 import streamlit.components.v1 as components
@@ -42,7 +41,7 @@ alert_price = st.sidebar.number_input("Notify at Price:", value=0.0, step=0.25)
 if st.sidebar.button("Enable Mobile Alerts", use_container_width=True):
     components.html("<script>Notification.requestPermission();</script>", height=0)
 
-# --- NEW: SIDEBAR CONNECTIVITY TEST ---
+# SIDEBAR CONNECTIVITY TEST
 st.sidebar.divider()
 st.sidebar.subheader("⚙️ System Health")
 if st.sidebar.button("Test API Connectivity", use_container_width=True):
@@ -53,7 +52,6 @@ if st.sidebar.button("Test API Connectivity", use_container_width=True):
                     st.error("❌ Key Missing in Secrets")
                 else:
                     test_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-                    # Minimal call to verify the key
                     test_client.models.list(config={'page_size': 1})
                     st.success("🟢 API Connected")
                     st.toast("System Ready!", icon="🚀")
@@ -106,12 +104,17 @@ def monitor_market():
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
-        return last_price
-    return None
+        
+        # --- PREPARE MOMENTUM DATA FOR AI ---
+        momentum_df = df.tail(10)[['Open', 'High', 'Low', 'Close']]
+        momentum_summary = momentum_df.to_string()
+        
+        return last_price, momentum_summary
+    return None, None
 
-last_market_price = monitor_market()
+last_market_price, momentum_data = monitor_market()
 
-# --- 6. AI SECTION (NEW 2026 CLIENT LOGIC) ---
+# --- 6. AI SECTION & LOG BOOK ---
 st.divider()
 st.subheader("📓 Trading Journal & AI Analysis")
 trade_notes = st.text_area("Trading Notes:", placeholder="e.g., Price rejected VWAP...")
@@ -120,30 +123,51 @@ col1, col2 = st.columns(2)
 
 with col1:
     if st.button("Generate AI Market Verdict", use_container_width=True):
-        try:
-            client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-            search_tool = types.Tool(google_search=types.GoogleSearch())
-            config = types.GenerateContentConfig(tools=[search_tool])
-            
-            with st.spinner('Scanning Live Sunday News...'):
-                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H Trend: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+        if momentum_data:
+            try:
+                client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                search_tool = types.Tool(google_search=types.GoogleSearch())
+                config = types.GenerateContentConfig(tools=[search_tool])
                 
-                response = client.models.generate_content(
-                    model='gemini-2.0-flash', 
-                    contents=prompt,
-                    config=config
-                )
-                
-                st.session_state['ai_verdict'] = response.text
-                st.markdown(response.text)
-        except Exception as e:
-            st.error(f"AI Setup Error: {e}")
+                with st.spinner('Analyzing Momentum & Macro News...'):
+                    # Prompt updated to include OHLC table
+                    prompt = f"""
+                    Analyze {target} for {datetime.now().strftime('%b %d, %Y')}.
+                    
+                    CURRENT CONTEXT:
+                    - 1-Hour Trend: {matrix_1h}
+                    - Last Price: {last_market_price}
+                    
+                    RECENT MOMENTUM (Last 10 Candles OHLC):
+                    {momentum_data}
+                    
+                    USER OBSERVATIONS:
+                    {trade_notes}
+                    
+                    TASK:
+                    1. Evaluate recent momentum vs the 1H trend.
+                    2. Check for breaking macro news (tariffs, Powell investigation).
+                    3. Provide a 'Verdict' and 'Confidence Level'.
+                    """
+                    
+                    response = client.models.generate_content(
+                        model='gemini-2.0-flash', 
+                        contents=prompt,
+                        config=config
+                    )
+                    
+                    st.session_state['ai_verdict'] = response.text
+                    st.markdown(response.text)
+            except Exception as e:
+                st.error(f"AI Setup Error: {e}")
+        else:
+            st.warning("Awaiting market data to analyze momentum.")
 
 with col2:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verdict_content = st.session_state.get('ai_verdict', "No AI Verdict generated yet.")
     
-    log_content = f"TIMESTAMP: {timestamp}\nASSET: {target}\nPRICE: {last_market_price}\nNOTES: {trade_notes}\nAI VERDICT: {verdict_content}"
+    log_content = f"TIMESTAMP: {timestamp}\nASSET: {target}\nPRICE: {last_market_price}\nMOMENTUM DATA:\n{momentum_data}\nNOTES: {trade_notes}\nAI VERDICT: {verdict_content}"
     
     st.download_button(
         label="📁 Download Trading Log",
