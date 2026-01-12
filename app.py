@@ -36,68 +36,83 @@ components.html("""
 # --- 3. SIDEBAR: VITALS & SENTIMENT ---
 st.sidebar.title("⚠️ Systemic Risk Monitor")
 
-# NEW: Sentiment Gauge
 sentiment_trend = st.sidebar.select_slider(
     "Headline Sentiment Trend",
     options=["Cooling", "Neutral", "Heating Up", "Explosive"],
     value="Heating Up"
 )
 
-event_alert = st.sidebar.toggle("🚨 SHOW SYSTEMIC EVENT ALERTS", value=True)
-
 def get_vitals_safe():
     try:
         vix_df = yf.download("^VIX", period="1d", interval="1m", progress=False, multi_level_index=False)
-        dxy_df = yf.download("DX-Y.NYB", period="1d", interval="1m", progress=False, multi_level_index=False)
         gold_df = yf.download("GC=F", period="1d", interval="1m", progress=False, multi_level_index=False)
         vix = vix_df['Close'].iloc[-1] if not vix_df.empty else 0.0
-        dxy = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 0.0
         gold = gold_df['Close'].iloc[-1] if not gold_df.empty else 0.0
-        return vix, dxy, gold
-    except: return 0.0, 0.0, 0.0
+        return vix, gold
+    except: return 0.0, 0.0
 
-vix_val, dxy_val, gold_val = get_vitals_safe()
-
+vix_val, gold_val = get_vitals_safe()
 st.sidebar.metric("Fear Index (VIX)", f"{vix_val:.2f}" if vix_val > 0 else "N/A")
 st.sidebar.metric("Gold (GC=F)", f"${gold_val:.2f}" if gold_val > 0 else "N/A")
 
 st.sidebar.divider()
 target = st.sidebar.selectbox("Market Asset", ["NQ=F", "ES=F"])
 
-# --- 4. MAIN INTERFACE: EVENT ALERTS ---
-if event_alert:
-    st.error(f"""
-    **🚨 SYSTEMIC RISK ALERT: FED INDEPENDENCE CRISIS**
-    - **Headline:** DOJ Investigation into Chair Powell escalates.
-    - **Sentiment:** News cycle is currently **{sentiment_trend}**.
-    """)
-
-# --- 5. THE REFRESHING MONITOR ---
+# --- 4. THE REFRESHING MONITOR & RISK/REWARD LOGIC ---
 @st.fragment(run_every=60)
 def monitor_market():
     df = yf.download(target, period="2d", interval="5m", multi_level_index=False)
     if not df.empty:
         df['VWAP'] = ((df['High'] + df['Low'] + df['Close'])/3 * df['Volume']).cumsum() / df['Volume'].cumsum()
         last_price = df['Close'].iloc[-1]
-        st.subheader(f"🚀 {target}: {last_price:.2f}")
         
+        # --- RISK/REWARD CALCULATIONS ---
+        recent_10 = df.tail(10)
+        volatility_range = (recent_10['High'] - recent_10['Low']).mean()
+        sl_buffer = volatility_range * 1.5
+        
+        # Long Setup
+        sl_long = last_price - sl_buffer
+        risk_per_contract = last_price - sl_long
+        tp_long = last_price + (risk_per_contract * 2) # 2:1 Reward
+        
+        # Short Setup
+        sl_short = last_price + sl_buffer
+        tp_short = last_price - (risk_per_contract * 2)
+        
+        st.subheader(f"🚀 {target} Live: {last_price:.2f}")
+        
+        # Risk Dashboard UI
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### 🟢 Long Setup (2:1 Ratio)")
+            st.write(f"**Target Profit:** {tp_long:.2f}")
+            st.write(f"**Stop Loss:** {sl_long:.2f}")
+            st.write(f"**Potential Gain:** +{tp_long - last_price:.2f}")
+            
+        with col2:
+            st.markdown("### 🔴 Short Setup (2:1 Ratio)")
+            st.write(f"**Target Profit:** {tp_short:.2f}")
+            st.write(f"**Stop Loss:** {sl_short:.2f}")
+            st.write(f"**Potential Gain:** +{last_price - tp_short:.2f}")
+
         fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
-        fig.update_layout(height=400, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
-        return last_price, df.tail(10).to_string()
-    return None, None
+        
+        return last_price, recent_10.to_string(), tp_long, sl_long, tp_short, sl_short
+    return None, None, None, None, None, None
 
-last_price, momentum_data = monitor_market()
+last_price, momentum_data, calc_tp_long, calc_sl_long, calc_tp_short, calc_sl_short = monitor_market()
 
-# --- 6. AI VERDICT & ACTION RECOMMENDATION ---
+# --- 5. AI VERDICT & STRATEGY ---
 st.divider()
-st.subheader("📓 AI Analysis & Trade Recommendation")
+st.subheader("📓 AI Analysis & Trade Strategy")
 
-headline_context = f"- EVENT: Fed Chair Powell Probe.\n- SENTIMENT: {sentiment_trend}.\n- VITALS: Gold at {gold_val:.2f}." if event_alert else ""
-trade_notes = st.text_area("Live Context:", value=headline_context, height=100)
+headline_context = f"- EVENT: Fed Chair Powell Probe\n- LONG PLAN: TP {calc_tp_long:.2f} / SL {calc_sl_long:.2f}\n- SHORT PLAN: TP {calc_tp_short:.2f} / SL {calc_sl_short:.2f}"
+trade_notes = st.text_area("Trade Context:", value=headline_context, height=120)
 
-if st.button("Generate AI Market Verdict & Action", use_container_width=True):
+if st.button("Generate Final Trade Plan", use_container_width=True):
     active_key = st.secrets.get("GEMINI_API_KEY", "")
     if not active_key:
         st.error("Missing API Key.")
@@ -106,23 +121,21 @@ if st.button("Generate AI Market Verdict & Action", use_container_width=True):
             client = genai.Client(api_key=active_key)
             config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
             
-            # Updated Prompt for specific recommendation action
-            prompt = f"""Analyze {target} for Jan 12. VIX: {vix_val}. Gold: {gold_val}. Sentiment: {sentiment_trend}. Headlines: {trade_notes}. Momentum: {momentum_data}
+            prompt = f"""Analyze {target} for Jan 12. VIX: {vix_val}. Sentiment: {sentiment_trend}.
+            Plan: LONG Target {calc_tp_long}, SHORT Target {calc_tp_short}.
+            Recent Momentum: {momentum_data}
             
             TASK: 
-            1. Provide a one-word recommendation: LONG, SHORT, or WAIT.
-            2. Explain the primary reason based on the 'Powell Probe' news.
-            3. List a 'Stop-Loss' level based on recent candle volatility."""
+            1. Directional Verdict: LONG, SHORT, or WAIT.
+            2. Probability of hitting the Target Profit before the Stop Loss.
+            3. How should the 'Powell news' affect position sizing?"""
             
             response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt, config=config)
-            st.session_state['ai_verdict'] = response.text
-            
-            # Visually separate the Recommendation
-            st.info("### 🤖 AI Trade Recommendation")
+            st.info("### 🤖 AI Trade Plan")
             st.markdown(response.text)
         except Exception as e:
             st.error(f"AI Setup Error: {e}")
 
 # Download
-log_c = f"LOG: {datetime.now()}\nASSET: {target}\nAI VERDICT:\n{st.session_state.get('ai_verdict', 'N/A')}"
-st.download_button("📁 Download Systemic Risk Log", data=log_c, file_name=f"Powell_Trade_Log.txt", use_container_width=True)
+log_c = f"LOG: {datetime.now()}\nASSET: {target}\nLONG PLAN: TP {calc_tp_long}/SL {calc_sl_long}\nSHORT PLAN: TP {calc_tp_short}/SL {calc_sl_short}\nAI PLAN:\n{st.session_state.get('ai_verdict', 'N/A')}"
+st.download_button("📁 Download Detailed Strategy Log", data=log_c, file_name=f"QuantStrategy_Log.txt", use_container_width=True)
