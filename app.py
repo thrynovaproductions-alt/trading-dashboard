@@ -42,6 +42,25 @@ alert_price = st.sidebar.number_input("Notify at Price:", value=0.0, step=0.25)
 if st.sidebar.button("Enable Mobile Alerts", use_container_width=True):
     components.html("<script>Notification.requestPermission();</script>", height=0)
 
+# --- NEW: SIDEBAR CONNECTIVITY TEST ---
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ System Health")
+if st.sidebar.button("Test API Connectivity", use_container_width=True):
+    with st.sidebar:
+        with st.spinner("Checking connection..."):
+            try:
+                if "GEMINI_API_KEY" not in st.secrets:
+                    st.error("❌ Key Missing in Secrets")
+                else:
+                    test_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                    # Minimal call to verify the key
+                    test_client.models.list(config={'page_size': 1})
+                    st.success("🟢 API Connected")
+                    st.toast("System Ready!", icon="🚀")
+            except Exception as e:
+                st.error(f"🔴 Connection Failed")
+                st.caption(f"Error: {e}")
+
 # --- 4. TREND MATRIX ---
 def get_trend(symbol, interval, period):
     data = yf.download(symbol, period=period, interval=interval, progress=False, multi_level_index=False)
@@ -73,7 +92,6 @@ def monitor_market():
         last_price = last_row['Close']
         curr_time = datetime.now().strftime("%H:%M:%S")
         
-        # Cross-over logic with Trend Matrix filtering
         if prev_row['SMA9'] <= prev_row['SMA21'] and last_row['SMA9'] > last_row['SMA21']:
             if "BULLISH" in matrix_1h:
                 fire_notification("🔥 CONFIRMED BUY", f"{target} at {last_price:.2f}")
@@ -103,10 +121,7 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("Generate AI Market Verdict", use_container_width=True):
         try:
-            # Initialize the new 2026 Client
             client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-            
-            # Configure Search Tooling correctly for 2026
             search_tool = types.Tool(google_search=types.GoogleSearch())
             config = types.GenerateContentConfig(tools=[search_tool])
             
@@ -114,7 +129,7 @@ with col1:
                 prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H Trend: {matrix_1h}. Notes: {trade_notes}. Verdict?"
                 
                 response = client.models.generate_content(
-                    model='gemini-2.0-flash', # Stable 2026 Flash model
+                    model='gemini-2.0-flash', 
                     contents=prompt,
                     config=config
                 )
