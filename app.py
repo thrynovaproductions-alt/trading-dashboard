@@ -33,64 +33,49 @@ components.html("""
     </script>
 """, height=0)
 
-# --- 3. SIDEBAR: STABLE VITALS & API CONTROL ---
+# --- 3. SIDEBAR: VITALS & API CONTROL ---
 st.sidebar.title("⚠️ Systemic Risk Monitor")
 
-# NEW: Manual API Key Override
-st.sidebar.subheader("🔑 API Management")
-manual_key = st.sidebar.text_input("Temporary API Key Override:", type="password", help="Paste a new key here to bypass stored secrets.")
+# NEW: Event Alert Toggle
+event_alert = st.sidebar.toggle("🚨 SHOW SYSTEMIC EVENT ALERTS", value=True)
 
-# Safe API Key Selection Logic
+st.sidebar.subheader("🔑 API Management")
+manual_key = st.sidebar.text_input("Temporary API Key Override:", type="password")
+
 def get_active_api_key():
-    if manual_key:
-        return manual_key
+    if manual_key: return manual_key
     return st.secrets.get("GEMINI_API_KEY", "")
 
 active_key = get_active_api_key()
 
-# CRASH-PROOF VITALS
 def get_vitals_safe():
     try:
         vix_df = yf.download("^VIX", period="1d", interval="1m", progress=False, multi_level_index=False)
         dxy_df = yf.download("DX-Y.NYB", period="1d", interval="1m", progress=False, multi_level_index=False)
         gold_df = yf.download("GC=F", period="1d", interval="1m", progress=False, multi_level_index=False)
-        
         vix = vix_df['Close'].iloc[-1] if not vix_df.empty else 0.0
         dxy = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 0.0
         gold = gold_df['Close'].iloc[-1] if not gold_df.empty else 0.0
         return vix, dxy, gold
-    except:
-        return 0.0, 0.0, 0.0
+    except: return 0.0, 0.0, 0.0
 
 vix_val, dxy_val, gold_val = get_vitals_safe()
 
-# UI Metrics (Fix for the f-string TypeError)
 st.sidebar.metric("Fear Index (VIX)", f"{vix_val:.2f}" if vix_val > 0 else "N/A")
-st.sidebar.subheader("⚖️ Independence Tracker")
 st.sidebar.metric("Gold (GC=F)", f"${gold_val:.2f}" if gold_val > 0 else "N/A")
 st.sidebar.metric("US Dollar (DXY)", f"{dxy_val:.2f}" if dxy_val > 0 else "N/A")
 
 st.sidebar.divider()
-shock_active = st.sidebar.toggle("POWELL PROBE ACTIVE", value=True)
-macro_risk = "CRITICAL" if shock_active else "MODERATE"
 target = st.sidebar.selectbox("Market Asset", ["NQ=F", "ES=F"])
 
-# --- 4. TREND MATRIX ---
-def get_trend(symbol, interval, period):
-    try:
-        data = yf.download(symbol, period=period, interval=interval, progress=False, multi_level_index=False)
-        if len(data) < 20: return "Neutral"
-        sma_short = data['Close'].rolling(9).mean().iloc[-1]
-        sma_long = data['Close'].rolling(21).mean().iloc[-1]
-        return "BULLISH 🟢" if sma_short > sma_long else "BEARISH 🔴"
-    except:
-        return "Offline ⚪"
-
-st.sidebar.subheader("Technical Matrix")
-matrix_1h = get_trend(target, "1h", "5d")
-matrix_1d = get_trend(target, "1d", "1mo")
-st.sidebar.write(f"1-Hour: {matrix_1h}")
-st.sidebar.write(f"Daily: {matrix_1d}")
+# --- 4. MAIN INTERFACE: EVENT ALERTS ---
+if event_alert:
+    st.error(f"""
+    **🚨 SYSTEMIC RISK ALERT: FED INDEPENDENCE CRISIS (Jan 12, 2026)**
+    - **Status:** CRITICAL Risk level detected.
+    - **Headline:** DOJ Investigation into Chair Powell escalates; Grand Jury subpoenas served.
+    - **Market Impact:** Gold at record highs ({gold_val:.2f}); High probability of liquidity shocks.
+    """)
 
 # --- 5. THE REFRESHING MONITOR ---
 @st.fragment(run_every=60)
@@ -110,27 +95,31 @@ def monitor_market():
 
 last_price, momentum_data = monitor_market()
 
-# --- 6. AI VERDICT ---
+# --- 6. AI VERDICT & NEWS ARCHIVE ---
 st.divider()
 st.subheader("📓 AI Analysis & Powell Probe Archive")
-shock_notes = f"- DOJ PROBE: Jerome Powell criminal investigation active (Jan 11).\n- INDEPENDENCE: USD at {dxy_val:.2f} | Gold at {gold_val:.2f}.\n- RISK: {macro_risk} systemic shock status."
-trade_notes = st.text_area("Live Headlines:", value=shock_notes if shock_active else "", height=150)
+
+# Automated Headline Injection based on the Alert Toggle
+headline_context = f"""- EVENT: Criminal probe into Fed Chair Jerome Powell.
+- INDEPENDENCE: Powell claims political intimidation for rate cuts.
+- VITALS: VIX at {vix_val:.2f} | Gold at {gold_val:.2f}.""" if event_alert else ""
+
+trade_notes = st.text_area("Live Headlines & Risk Context:", value=headline_context, height=120)
 
 if st.button("Generate Systemic Risk Verdict", use_container_width=True):
     if not active_key:
-        st.error("Missing API Key. Please add one to secrets or the sidebar.")
+        st.error("Missing API Key.")
     else:
         try:
-            # Uses the dynamic key from get_active_api_key()
             client = genai.Client(api_key=active_key)
             config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
-            prompt = f"Analyze {target} for Jan 11-12. VIX: {vix_val}. Risk: {macro_risk}. Momentum: {momentum_data}"
+            prompt = f"Analyze {target} for Jan 12. VIX: {vix_val}. Gold: {gold_val}. Headlines: {trade_notes}. Momentum: {momentum_data}"
             response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt, config=config)
             st.session_state['ai_verdict'] = response.text
             st.markdown(response.text)
         except Exception as e:
             st.error(f"AI Setup Error: {e}")
 
-# Download Logic
-log_c = f"LOG: {datetime.now()}\nASSET: {target}\nVIX: {vix_val}\nAI VERDICT:\n{st.session_state.get('ai_verdict', 'N/A')}"
+# Download
+log_c = f"LOG: {datetime.now()}\nASSET: {target}\nGOLD: {gold_val}\nAI VERDICT:\n{st.session_state.get('ai_verdict', 'N/A')}"
 st.download_button("📁 Download Systemic Risk Log", data=log_c, file_name=f"Powell_Crisis_Log.txt", use_container_width=True)
