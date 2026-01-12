@@ -4,7 +4,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import google.generativeai as genai
+# --- NEW 2026 SDK IMPORTS ---
+from google import genai
+from google.genai import types
 import streamlit.components.v1 as components
 from datetime import datetime
 
@@ -71,6 +73,7 @@ def monitor_market():
         last_price = last_row['Close']
         curr_time = datetime.now().strftime("%H:%M:%S")
         
+        # Cross-over logic with Trend Matrix filtering
         if prev_row['SMA9'] <= prev_row['SMA21'] and last_row['SMA9'] > last_row['SMA21']:
             if "BULLISH" in matrix_1h:
                 fire_notification("🔥 CONFIRMED BUY", f"{target} at {last_price:.2f}")
@@ -85,16 +88,14 @@ def monitor_market():
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
-        
         return last_price
     return None
 
 last_market_price = monitor_market()
 
-# --- 6. AI SECTION & TRADING JOURNAL (LOG BOOK) ---
+# --- 6. AI SECTION (NEW 2026 CLIENT LOGIC) ---
 st.divider()
 st.subheader("📓 Trading Journal & AI Analysis")
-
 trade_notes = st.text_area("Trading Notes:", placeholder="e.g., Price rejected VWAP...")
 
 col1, col2 = st.columns(2)
@@ -102,25 +103,24 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("Generate AI Market Verdict", use_container_width=True):
         try:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            # Initialize the new 2026 Client
+            client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
             
-            # --- UPDATED GOOGLE SEARCH TOOL NAME ---
-            tools = [{"google_search": {}}]
+            # Configure Search Tooling correctly for 2026
+            search_tool = types.Tool(google_search=types.GoogleSearch())
+            config = types.GenerateContentConfig(tools=[search_tool])
             
-            # Fallback model logic
-            model_to_use = "gemini-3-flash-preview" 
-            try:
-                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
-                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
-                response_text = model.generate_content(prompt).text
-            except Exception:
-                model_to_use = "gemini-2.5-flash"
-                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
-                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
-                response_text = model.generate_content(prompt).text
-            
-            st.session_state['ai_verdict'] = response_text
-            st.markdown(response_text)
+            with st.spinner('Scanning Live Sunday News...'):
+                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H Trend: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash', # Stable 2026 Flash model
+                    contents=prompt,
+                    config=config
+                )
+                
+                st.session_state['ai_verdict'] = response.text
+                st.markdown(response.text)
         except Exception as e:
             st.error(f"AI Setup Error: {e}")
 
@@ -128,22 +128,8 @@ with col2:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verdict_content = st.session_state.get('ai_verdict', "No AI Verdict generated yet.")
     
-    log_content = f"""
-TRADING LOG ENTRY
------------------
-Timestamp: {timestamp}
-Asset: {target}
-Market Price: {last_market_price}
-1H Trend: {matrix_1h}
-Daily Trend: {matrix_1d}
-
-USER NOTES:
-{trade_notes}
-
-AI VERDICT:
-{verdict_content}
------------------
-"""
+    log_content = f"TIMESTAMP: {timestamp}\nASSET: {target}\nPRICE: {last_market_price}\nNOTES: {trade_notes}\nAI VERDICT: {verdict_content}"
+    
     st.download_button(
         label="📁 Download Trading Log",
         data=log_content,
