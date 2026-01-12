@@ -1,2 +1,6 @@
-pip uninstall google-generativeai
-pip install google-genai
+streamlit
+yfinance
+pandas
+numpy
+plotly
+google-genai
