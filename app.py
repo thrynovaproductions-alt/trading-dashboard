@@ -36,7 +36,7 @@ target_symbol = asset_map[target_label]
 def get_trend_status(symbol, key, interval):
     try:
         client = db.Historical(key)
-        # Using supported schema 'ohlcv-1h' for trend analysis
+        # Using supported schemas for trend analysis
         data = client.timeseries.get_range(dataset='GLBX.MDP3', symbols=symbol, schema=f'ohlcv-{interval}', start=(datetime.now() - timedelta(days=2)))
         df = data.to_df()
         return "BULLISH 🟢" if df['close'].iloc[-1] > df['close'].rolling(20).mean().iloc[-1] else "BEARISH 🔴"
@@ -61,7 +61,7 @@ headline_sentiment = st.sidebar.select_slider("Headline Sentiment", options=["Co
 if headline_sentiment in ["Heating Up", "Explosive"]:
     st.error(f"🚨 **SYSTEMIC RISK ALERT: FED INDEPENDENCE CRISIS** - Sentiment: {headline_sentiment}")
 
-# Market Monitoring with Schema Fix
+# Market Monitoring with Resampling Fix
 @st.fragment(run_every=60)
 def monitor_market():
     if not active_db_key:
@@ -74,14 +74,14 @@ def monitor_market():
         data = client.timeseries.get_range(dataset='GLBX.MDP3', symbols=target_symbol, schema='ohlcv-1m', start=(datetime.now() - timedelta(hours=6)))
         df_raw = data.to_df()
         
-        # Resample to 5-minute candles
+        # Resample to 5-minute candles to satisfy workstation requirements
         df = df_raw.resample('5min').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
         
         last_price = df['close'].iloc[-1]
         df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
         vwap_val = df['vwap'].iloc[-1]
         
-        # 5-Tier Signal Logic
+        # 5-Tier Signal Logic restoration
         vol = (df['high'] - df['low']).tail(10).mean()
         if abs(last_price - vwap_val) < (vol * 0.3):
             sig_str = "WAIT ⏳"
