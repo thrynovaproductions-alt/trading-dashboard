@@ -18,7 +18,7 @@ st.set_page_config(layout="wide", page_title="AI Trading Terminal", initial_side
 if 'wins' not in st.session_state: st.session_state.wins = 0
 if 'losses' not in st.session_state: st.session_state.losses = 0
 
-# --- 3. API MONITORING ENGINE (NEW) ---
+# --- 3. API MONITORING & HEALTH ---
 def get_api_usage(key):
     try:
         if not key: return 0, "N/A"
@@ -31,7 +31,7 @@ def get_api_usage(key):
 # --- 4. SIDEBAR: COMMAND CENTER ---
 st.sidebar.title("⚠️ Systemic Risk Monitor")
 
-# A. API MANAGEMENT & HEALTH
+# A. API MANAGEMENT
 st.sidebar.subheader("🔌 API Health")
 twelve_key = st.sidebar.text_input("Twelve Data Key:", type="password")
 ai_key = st.sidebar.text_input("Gemini Key Override:", type="password")
@@ -43,15 +43,13 @@ used, left = get_api_usage(active_twelve_key)
 st.sidebar.write(f"Credits Used: {used}")
 st.sidebar.write(f"Credits Left: {left}")
 
-if str(left).isdigit() and int(left) < 50:
-    st.sidebar.warning("⚠️ Low API Credits! Slowing down refresh rate...")
-
-# B. PERFORMANCE TRACKER
+# B. AUTO-REFRESH & PERFORMANCE
+auto_refresh = st.sidebar.toggle("Auto-Refresh Data (60s)", value=True)
 total_trades = st.session_state.wins + st.session_state.losses
 win_rate = (st.session_state.wins / total_trades * 100) if total_trades > 0 else 0
 st.sidebar.metric("Win Rate", f"{win_rate:.1f}%", f"Total: {total_trades}")
 
-# C. MARKET VITALS (Twelve Data + Fallback)
+# C. MARKET VITALS
 def get_vitals():
     try:
         td = TDClient(apikey=active_twelve_key)
@@ -66,8 +64,11 @@ v_val, d_val, g_val = get_vitals()
 st.sidebar.metric("VIX (Real-Time)", f"{v_val:.2f}")
 st.sidebar.metric("Gold", f"${g_val:.2f}")
 
-# D. TREND MATRIX
-target = st.sidebar.selectbox("Market Asset", ["NQ", "ES"])
+# D. SYMBOL MAPPING & TREND
+asset_map = {"NQ (Nasdaq 100)": "NDX", "ES (S&P 500)": "SPX"}
+target_label = st.sidebar.selectbox("Market Asset", list(asset_map.keys()))
+target_symbol = asset_map[target_label]
+
 def get_trend_twelve(symbol):
     try:
         td = TDClient(apikey=active_twelve_key)
@@ -76,14 +77,16 @@ def get_trend_twelve(symbol):
         return "BULLISH" if sma9 > sma21 else "BEARISH"
     except: return "Neutral"
 
-trend_1h = get_trend_twelve(target)
-st.sidebar.write(f"1-Hour Trend: {trend_1h}")
+trend_1h = get_trend_twelve(target_symbol)
+st.sidebar.write(f"1-Hour Trend ({target_symbol}): {trend_1h}")
 
 st.sidebar.divider()
 sentiment_trend = st.sidebar.select_slider("Headline Sentiment", options=["Cooling", "Neutral", "Heating Up", "Explosive"], value="Heating Up")
 
-# --- 5. THE MONITOR & HIGH-FIDELITY DATA ---
-@st.fragment(run_every=60)
+# --- 5. THE MONITOR & 5-TIER SIGNAL LOGIC ---
+refresh_rate = 60 if auto_refresh else None
+
+@st.fragment(run_every=refresh_rate)
 def monitor_market():
     if not active_twelve_key:
         st.warning("Enter Twelve Data API Key in sidebar.")
@@ -91,10 +94,9 @@ def monitor_market():
     
     try:
         td = TDClient(apikey=active_twelve_key)
-        df = td.time_series(symbol=target, interval="5min", outputsize=50).as_pandas()
+        df = td.time_series(symbol=target_symbol, interval="5min", outputsize=50).as_pandas()
         df.index = pd.to_datetime(df.index)
         
-        # Integrity & Signal Logic
         last_price = df['close'].iloc[0]
         vwap_last = (df['close'] * df['volume']).cumsum().iloc[0] / df['volume'].cumsum().iloc[0]
         
@@ -107,12 +109,12 @@ def monitor_market():
         else:
             sig_str = "STRONG SHORT 📉" if trend_1h == "BEARISH" else "WEAK SHORT ⚠️"
 
-        # Risk Shield (2:1 Ratio)
+        # Risk Shield
         sl_buffer = (df['high'].head(10) - df['low'].head(10)).mean() * 1.5
         sl_l = last_price - sl_buffer; tp_l = last_price + (sl_buffer * 3)
         sl_s = last_price + sl_buffer; tp_s = last_price - (sl_buffer * 3)
 
-        st.subheader(f"🚀 {target} Live: {last_price:.2f} | {sig_str}")
+        st.subheader(f"🚀 {target_label} Live: {last_price:.2f} | {sig_str}")
         
         c1, c2 = st.columns(2)
         with c1: st.success(f"🟢 LONG: TP {tp_l:.2f} | SL {sl_l:.2f}")
@@ -124,7 +126,7 @@ def monitor_market():
         
         return last_price, df.head(10).to_string(), sig_str
     except Exception as e:
-        st.error(f"API Error: {e}")
+        st.error(f"Data Error: {e}")
         return None
 
 m_data = monitor_market()
@@ -136,7 +138,7 @@ st.divider()
 if st.button("🚀 Generate AI Verdict", use_container_width=True):
     if active_ai_key:
         client = genai.Client(api_key=active_ai_key)
-        prompt = f"VERDICT: {target} at {lp}. Signal: {ss}. Context: Powell Probe. Max 50 words."
+        prompt = f"VERDICT: {target_label} at {lp}. Signal: {ss}. Context: Powell Probe. Max 50 words."
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
         st.info(f"### 🤖 AI Verdict: {ss}")
         st.markdown(response.text)
