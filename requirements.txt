@@ -2,7 +2,6 @@ streamlit
 pandas
 numpy
 plotly
-twelvedata
+databento
 google-genai
-yfinance
 pytz
