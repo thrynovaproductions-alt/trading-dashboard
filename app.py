@@ -43,12 +43,6 @@ st.sidebar.divider()
 st.sidebar.subheader("🌍 Global Market Drivers")
 st.sidebar.markdown("[🔥 View Real-Time Global Heatmap](https://www.tradingview.com/heatmap/stock/)")
 
-# Top Weights for Contextual Analysis
-top_drivers = {
-    "QQQ": ["AAPL", "MSFT", "AMZN", "NVDA", "META", "GOOGL", "TSLA", "GOOG", "AVGO", "COST"],
-    "SPY": ["MSFT", "AAPL", "NVDA", "AMZN", "META", "GOOGL", "BRK.B", "GOOG", "AVGO", "JPM"]
-}
-
 # C. RELATIVE STRENGTH & PERFORMANCE
 def get_relative_strength():
     try:
@@ -83,7 +77,7 @@ def monitor_market():
         df = td.time_series(symbol=target_symbol, interval="5min", outputsize=50).as_pandas()
         df.index = pd.to_datetime(df.index)
         
-        # Trend Matrix
+        # Trend Matrix (1H)
         ts_1h = td.time_series(symbol=target_symbol, interval="1h", outputsize=20).as_pandas()
         trend = "BULLISH" if ts_1h['close'].iloc[0] > ts_1h['close'].iloc[-1] else "BEARISH"
         
@@ -101,7 +95,7 @@ def monitor_market():
         else:
             sig_str = "STRONG SHORT 📉" if trend == "BEARISH" else "WEAK SHORT ⚠️"
 
-        # Risk Shield
+        # Risk Shield (2:1 Ratio)
         sl_buffer = vol_ref * 1.5
         sl_l = last_price - sl_buffer; tp_l = last_price + (sl_buffer * 3)
         sl_s = last_price + sl_buffer; tp_s = last_price - (sl_buffer * 3)
@@ -129,9 +123,6 @@ st.divider()
 col_j1, col_j2 = st.columns([1, 2])
 
 with col_j1:
-    st.write(f"### 🏢 {target_symbol} Top Weights")
-    st.write(", ".join(top_drivers[target_symbol]))
-    
     st.write("### 🏁 Log Trade")
     res_col1, res_col2 = st.columns(2)
     with res_col1:
@@ -147,7 +138,7 @@ with col_j2:
     if st.button("🚀 AI Strategy Verdict", use_container_width=True):
         if active_ai_key and m_data:
             client = genai.Client(api_key=active_ai_key)
-            prompt = f"VERDICT: {target_symbol}. Signal: {m_data[1]}. Trend: {m_data[2]}. RS Status: {rs_status}. Context: Powell Probe. Max 50 words."
+            prompt = f"VERDICT: {target_symbol}. Signal: {m_data[1]}. Trend: {m_data[2]}. RS Status: {rs_status}. Max 50 words."
             response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
             st.info(f"### 🤖 AI Verdict: {m_data[1]}")
             st.markdown(response.text)
