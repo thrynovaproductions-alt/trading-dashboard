@@ -1,122 +1,153 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import databento as db
-from google import genai
-from google.genai import types
-from datetime import datetime, timedelta
-import pytz
+from plotly.subplots import make_subplots
+import google.generativeai as genai
+import streamlit.components.v1 as components
+from datetime import datetime
 
 # --- 1. CORE CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="NQ & ES Quant Workstation", initial_sidebar_state="collapsed")
+st.set_page_config(layout="wide", page_title="AI Trading Terminal", initial_sidebar_state="collapsed")
 
-# --- 2. PERSISTENT STATE ---
-if 'wins' not in st.session_state: st.session_state.wins = 0
-if 'losses' not in st.session_state: st.session_state.losses = 0
+# --- 2. PWA & NOTIFICATION ENGINE ---
+def fire_notification(title, body):
+    components.html(f"""
+        <script>
+        if (Notification.permission === 'granted') {{
+            new Notification('{title}', {{ body: '{body}', icon: 'https://cdn-icons-png.flaticon.com/512/2464/2464402.png' }});
+        }}
+        </script>
+    """, height=0)
 
-# --- 3. SIDEBAR: COMMAND CENTER ---
-st.sidebar.title("⚠️ Systemic Risk Monitor")
+components.html("""
+    <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() { navigator.serviceWorker.register('./sw.js'); });
+    }
+    var link = window.parent.document.createElement("link");
+    link.rel = "manifest"; link.href = "./manifest.json";
+    window.parent.document.head.appendChild(link);
+    </script>
+""", height=0)
 
-# A. API MANAGEMENT
-st.sidebar.subheader("🔌 API Health")
-db_key_input = st.sidebar.text_input("Databento Key:", value="db-q97NCEbRyn7cLkWg6qPyjaWbpEfRn", type="password")
-gemini_key_input = st.sidebar.text_input("Gemini Key Override:", type="password")
+# --- 3. SIDEBAR & SETTINGS ---
+target = st.sidebar.selectbox("Market Asset", ["NQ=F", "ES=F"])
+st.sidebar.subheader("🎯 Price Alerts")
+alert_price = st.sidebar.number_input("Notify at Price:", value=0.0, step=0.25)
 
-active_db_key = db_key_input if db_key_input else st.secrets.get("DATABENTO_API_KEY", "")
-active_gemini_key = gemini_key_input if gemini_key_input else st.secrets.get("GEMINI_API_KEY", "")
+if st.sidebar.button("Enable Mobile Alerts", use_container_width=True):
+    components.html("<script>Notification.requestPermission();</script>", height=0)
 
-# B. MULTI-TIMEFRAME TREND
-st.sidebar.divider()
+# --- 4. TREND MATRIX ---
+def get_trend(symbol, interval, period):
+    data = yf.download(symbol, period=period, interval=interval, progress=False, multi_level_index=False)
+    if len(data) < 20: return "Neutral"
+    sma_short = data['Close'].rolling(9).mean().iloc[-1]
+    sma_long = data['Close'].rolling(21).mean().iloc[-1]
+    return "BULLISH 🟢" if sma_short > sma_long else "BEARISH 🔴"
+
 st.sidebar.subheader("Multi-Timeframe Trend")
-asset_map = {"NQ Futures": "NASD.NQ", "ES Futures": "CME.ES"}
-target_label = st.sidebar.selectbox("Market Asset", list(asset_map.keys()))
-target_symbol = asset_map[target_label]
-
-def get_trend_status(symbol, key, interval):
-    try:
-        client = db.Historical(key)
-        # Using supported schemas for trend analysis
-        data = client.timeseries.get_range(dataset='GLBX.MDP3', symbols=symbol, schema=f'ohlcv-{interval}', start=(datetime.now() - timedelta(days=2)))
-        df = data.to_df()
-        return "BULLISH 🟢" if df['close'].iloc[-1] > df['close'].rolling(20).mean().iloc[-1] else "BEARISH 🔴"
-    except: return "Connection ⚪"
-
-st.sidebar.write(f"1-Hour: {get_trend_status(target_symbol, active_db_key, '1h')}")
-st.sidebar.write(f"Daily: {get_trend_status(target_symbol, active_db_key, '1d')}")
-
-# C. BACKTEST LAB & PERFORMANCE
+matrix_1h = get_trend(target, "1h", "5d")
+matrix_1d = get_trend(target, "1d", "1mo")
+st.sidebar.write(f"1-Hour: {matrix_1h}")
+st.sidebar.write(f"Daily: {matrix_1d}")
 st.sidebar.divider()
-st.sidebar.subheader("📊 Backtest & Optimizer Lab")
-st.sidebar.button("Run Optimizer + Backtest", use_container_width=True)
 
-total_trades = st.session_state.wins + st.session_state.losses
-win_rate = (st.session_state.wins / total_trades * 100) if total_trades > 0 else 0.0
-st.sidebar.metric("Win Rate", f"{win_rate:.1f}%", f"Total: {total_trades}")
-
-# --- 4. MAIN INTERFACE ---
-st.title(f"🚀 {target_label} Quant Workstation")
-
-headline_sentiment = st.sidebar.select_slider("Headline Sentiment", options=["Cooling", "Neutral", "Heating Up", "Explosive"], value="Heating Up")
-if headline_sentiment in ["Heating Up", "Explosive"]:
-    st.error(f"🚨 **SYSTEMIC RISK ALERT: FED INDEPENDENCE CRISIS** - Sentiment: {headline_sentiment}")
-
-# Market Monitoring with Resampling Fix
+# --- 5. THE REFRESHING MONITOR ---
 @st.fragment(run_every=60)
 def monitor_market():
-    if not active_db_key:
-        st.info("💡 Waiting for Databento Key...")
-        return None, None
+    df = yf.download(target, period="2d", interval="5m", multi_level_index=False)
     
-    try:
-        client = db.Historical(active_db_key)
-        # Fetching 1m bars and resampling to 5m to fix Schema Error
-        data = client.timeseries.get_range(dataset='GLBX.MDP3', symbols=target_symbol, schema='ohlcv-1m', start=(datetime.now() - timedelta(hours=6)))
-        df_raw = data.to_df()
+    if not df.empty:
+        df['SMA9'] = df['Close'].rolling(9).mean()
+        df['SMA21'] = df['Close'].rolling(21).mean()
+        df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+        df['VWAP'] = (df['Typical_Price'] * df['Volume']).cumsum() / df['Volume'].cumsum()
         
-        # Resample to 5-minute candles to satisfy workstation requirements
-        df = df_raw.resample('5min').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
+        last_row = df.iloc[-1]
+        prev_row = df.iloc[-2]
+        last_price = last_row['Close']
+        curr_time = datetime.now().strftime("%H:%M:%S")
         
-        last_price = df['close'].iloc[-1]
-        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
-        vwap_val = df['vwap'].iloc[-1]
-        
-        # 5-Tier Signal Logic restoration
-        vol = (df['high'] - df['low']).tail(10).mean()
-        if abs(last_price - vwap_val) < (vol * 0.3):
-            sig_str = "WAIT ⏳"
-        else:
-            sig_str = "STRONG LONG 🚀" if last_price > vwap_val else "STRONG SHORT 📉"
+        if prev_row['SMA9'] <= prev_row['SMA21'] and last_row['SMA9'] > last_row['SMA21']:
+            if "BULLISH" in matrix_1h:
+                fire_notification("🔥 CONFIRMED BUY", f"{target} at {last_price:.2f}")
 
-        st.subheader(f"Current Signal: {sig_str} | Price: {last_price:.2f}")
+        if alert_price > 0 and abs(last_price - alert_price) < 2:
+            fire_notification("🎯 PRICE TARGET NEAR", f"{target} is at {last_price:.2f}")
 
-        fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price")])
-        fig.add_trace(go.Scatter(x=df.index, y=df['vwap'], line=dict(color='cyan', dash='dash'), name="VWAP"))
+        st.subheader(f"🚀 Live {target}: {last_price:.2f} (Refreshed: {curr_time})")
+        
+        fig = make_subplots(rows=1, cols=1)
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
+        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        return last_price, sig_str
-    except Exception as e:
-        st.error(f"Databento Connection Issue: {e}")
-        return None, None
+        return last_price
+    return None
 
-current_price, current_signal = monitor_market()
+last_market_price = monitor_market()
 
-# --- 5. THE VERDICT & LOGGING (REINSTATED) ---
+# --- 6. AI SECTION & TRADING JOURNAL (LOG BOOK) ---
 st.divider()
-if st.button("Analyze Current Setup", use_container_width=True):
-    if active_gemini_key and current_price:
-        try:
-            client = genai.Client(api_key=active_gemini_key)
-            prompt = f"VERDICT: {target_label} at {current_price}. Signal: {current_signal}. Risk: {headline_sentiment}. Max 50 words."
-            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-            st.info(f"### 🤖 AI Strategy Verdict")
-            st.markdown(response.text)
-        except Exception as e: st.error(f"AI Error: {e}")
-    else: st.warning("⚠️ Verify Gemini Key and Market Data connection.")
+st.subheader("📓 Trading Journal & AI Analysis")
 
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("✅ HIT TARGET", use_container_width=True): st.session_state.wins += 1; st.balloons()
-with c2:
-    if st.button("❌ HIT STOP-LOSS", use_container_width=True): st.session_state.losses += 1
+trade_notes = st.text_area("Trading Notes:", placeholder="e.g., Price rejected VWAP...")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("Generate AI Market Verdict", use_container_width=True):
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            
+            # --- UPDATED GOOGLE SEARCH TOOL NAME ---
+            tools = [{"google_search": {}}]
+            
+            # Fallback model logic
+            model_to_use = "gemini-3-flash-preview" 
+            try:
+                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
+                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                response_text = model.generate_content(prompt).text
+            except Exception:
+                model_to_use = "gemini-2.5-flash"
+                model = genai.GenerativeModel(model_name=model_to_use, tools=tools)
+                prompt = f"Analyze {target} for {datetime.now().strftime('%b %d, %Y')}. 1H: {matrix_1h}. Notes: {trade_notes}. Verdict?"
+                response_text = model.generate_content(prompt).text
+            
+            st.session_state['ai_verdict'] = response_text
+            st.markdown(response_text)
+        except Exception as e:
+            st.error(f"AI Setup Error: {e}")
+
+with col2:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    verdict_content = st.session_state.get('ai_verdict', "No AI Verdict generated yet.")
+    
+    log_content = f"""
+TRADING LOG ENTRY
+-----------------
+Timestamp: {timestamp}
+Asset: {target}
+Market Price: {last_market_price}
+1H Trend: {matrix_1h}
+Daily Trend: {matrix_1d}
+
+USER NOTES:
+{trade_notes}
+
+AI VERDICT:
+{verdict_content}
+-----------------
+"""
+    st.download_button(
+        label="📁 Download Trading Log",
+        data=log_content,
+        file_name=f"Trade_Log_{target}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+        mime="text/plain",
+        use_container_width=True
+    )
