@@ -16,9 +16,16 @@ if 'losses' not in st.session_state: st.session_state.losses = 0
 
 # --- 3. SIDEBAR: RECOGNIZABLE COMMAND CENTER ---
 st.sidebar.title("⚠️ Systemic Risk Monitor")
-st.sidebar.subheader("🔌 AI Authentication")
-google_key_input = st.sidebar.text_input("Google AI Key:", type="password")
-active_google_key = google_key_input if google_key_input else st.secrets.get("GEMINI_API_KEY", "")
+
+# AI Authentication: Auto-load from Secrets
+active_google_key = st.secrets.get("GEMINI_API_KEY", "")
+
+if not active_google_key:
+    st.sidebar.subheader("🔌 AI Authentication")
+    google_key_input = st.sidebar.text_input("Paste Google AI Key:", type="password")
+    active_google_key = google_key_input
+else:
+    st.sidebar.success("✅ AI Engine Authenticated")
 
 # Multi-Timeframe Trend
 st.sidebar.divider()
@@ -50,7 +57,6 @@ st.title(f"🚀 {target_label} Quant Workstation")
 @st.fragment(run_every=60)
 def monitor_market():
     try:
-        # Fast, Free Market Data
         df = yf.download(target_symbol, period="2d", interval="5m", progress=False, multi_level_index=False)
         if df.empty: return None
         
@@ -73,7 +79,6 @@ def monitor_market():
 
         st.subheader(f"Current Signal: {sig_str} | Price: {last_price:.2f}")
 
-        # Restored Chart
         fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price")])
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
@@ -90,16 +95,14 @@ market_data = monitor_market()
 st.divider()
 if st.button("Analyze Current Setup", use_container_width=True):
     if not active_google_key:
-        st.warning("⚠️ Enter Google AI Key in sidebar.")
+        st.warning("⚠️ Enter Google AI Key in sidebar or Secrets.")
     elif market_data:
         try:
             client = genai.Client(api_key=active_google_key)
             prompt = f"""
             AI Verdict: {market_data['signal']}
-            Price: {market_data['price']}
-            Trend: {market_data['trend']}
-            SMA(9): {market_data['sma9']} | SMA(21): {market_data['sma21']}
-            VWAP: {market_data['vwap']}
+            Price: {market_data['price']} | Trend: {market_data['trend']}
+            SMA(9): {market_data['sma9']} | SMA(21): {market_data['sma21']} | VWAP: {market_data['vwap']}
             
             Provide:
             1. Signal Assessment (Confidence % and breakdown)
