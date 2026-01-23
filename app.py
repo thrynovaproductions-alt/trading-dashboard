@@ -11,147 +11,121 @@ from google import genai
 st.set_page_config(layout="wide", page_title="NQ & ES Quant Pro", initial_sidebar_state="expanded")
 
 @st.cache_data(ttl=300)
-def get_sector_performance():
-    sectors = {"Tech (XLK)": "XLK", "Defensive (XLU)": "XLU", "Finance (XLF)": "XLF"}
-    perf = {}
-    for name, ticker in sectors.items():
-        try:
-            d = yf.download(ticker, period="1d", interval="5m", progress=False, multi_level_index=False)
-            if not d.empty and len(d) > 1:
-                perf[name] = ((d['Close'].iloc[-1] - d['Open'].iloc[0]) / d['Open'].iloc[0]) * 100
-            else: perf[name] = 0.0
-        except: perf[name] = 0.0
-    return perf
-
-@st.cache_data(ttl=60)
-def get_vix_level():
+def get_market_pulse():
+    """Macro data, sectors, and RS"""
     try:
-        vix = yf.download("^VIX", period="1d", interval="1m", progress=False, multi_level_index=False)
-        return float(vix['Close'].iloc[-1]) if not vix.empty else 0.0
-    except: return 0.0
+        tickers = ["XLK", "XLU", "XLF", "^TNX", "^VIX", "NQ=F", "ES=F"]
+        data = yf.download(tickers, period="2d", interval="5m", progress=False, multi_level_index=False)['Close']
+        perf = {k: ((data[v].iloc[-1] - data[v].iloc[0]) / data[v].iloc[0]) * 100 for k, v in {"Tech": "XLK", "Def": "XLU", "Fin": "XLF"}.items()}
+        rs_ratio = data["NQ=F"] / data["ES=F"]
+        rs_change = ((rs_ratio.iloc[-1] - rs_ratio.iloc[0]) / rs_ratio.iloc[0]) * 100
+        return perf, data["^VIX"].iloc[-1], data["^TNX"].iloc[-1], rs_change
+    except: return {}, 0.0, 0.0, 0.0
 
-# --- 2. PERSISTENT STATE ---
+# --- 2. TREND HEATMAP LOGIC ---
+def get_tf_trend(symbol, interval):
+    """Calculates SMA trend for specific timeframes"""
+    try:
+        data = yf.download(symbol, period="2d", interval=interval, progress=False, multi_level_index=False)['Close']
+        sma9, sma21 = data.rolling(9).mean().iloc[-1], data.rolling(21).mean().iloc[-1]
+        return "🟢" if sma9 > sma21 else "🔴"
+    except: return "⚪"
+
+# --- 3. PERSISTENT STATE ---
 defaults = {'wins': 0, 'losses': 0, 'trade_log': [], 'total_pnl': 0.0}
 for key, val in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+    if key not in st.session_state: st.session_state[key] = val
 
-# --- 3. SIDEBAR: RISK & AUTH ---
+# --- 4. SIDEBAR: HEATMAP & MACRO ---
 st.sidebar.title("🛡️ Risk Management")
 active_google_key = st.secrets.get("GEMINI_API_KEY", "")
 if not active_google_key:
-    active_google_key = st.sidebar.text_input("Google AI Key:", type="password")
+    active_google_key = st.sidebar.text_input("Gemini API Key:", type="password")
 
-account_size = st.sidebar.number_input("Account Balance ($)", value=50000, step=1000)
-risk_pct = st.sidebar.slider("Risk per Trade (%)", 0.5, 5.0, 1.0, step=0.1) / 100
-target_rr = st.sidebar.number_input("Target R:R Ratio", value=2.0, step=0.5)
+account_size = st.sidebar.number_input("Account Balance ($)", value=50000)
+risk_pct = st.sidebar.slider("Risk (%)", 0.5, 5.0, 1.0) / 100
 
+# Trend Heatmap
 st.sidebar.divider()
-st.sidebar.subheader("🌍 Market Pulse")
-sectors = get_sector_performance()
-for s, p in sectors.items():
-    st.sidebar.metric(s, f"{p:.2f}%")
+st.sidebar.subheader("🔥 Trend Heatmap")
+asset_map = {"NQ=F (Nasdaq)": "NQ=F", "ES=F (S&P 500)": "ES=F"}
+target_label = st.sidebar.selectbox("Market Asset", list(asset_map.keys()))
+target_symbol = asset_map[target_label]
 
-vix = get_vix_level()
-st.sidebar.metric("VIX Fear Gauge", f"{vix:.1f}")
+c1, c2, c3 = st.sidebar.columns(3)
+c1.metric("1m", get_tf_trend(target_symbol, "1m"))
+c2.metric("5m", get_tf_trend(target_symbol, "5m"))
+c3.metric("15m", get_tf_trend(target_symbol, "15m"))
 
-# Performance Reset
-if st.sidebar.button("🔄 Reset Session", use_container_width=True):
-    for key in defaults: st.session_state[key] = defaults[key]
-    st.rerun()
+sectors, vix, tnx, rs_lead = get_market_pulse()
+st.sidebar.divider()
+st.sidebar.metric("VIX (Fear)", f"{vix:.1f}"); st.sidebar.metric("10Y Yield", f"{tnx:.2f}%")
 
-# --- 4. ANALYTICS FUNCTIONS ---
+# --- 5. ANALYTICS FUNCTIONS ---
 def calculate_vwap_metrics(df):
     if df.empty or len(df) < 21: return None
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     df['ATR'] = df['High'].rolling(14).max() - df['Low'].rolling(14).min()
-    last_price = df['Close'].iloc[-1]
-    last_vwap = df['VWAP'].iloc[-1]
-    deviation_pct = ((last_price - last_vwap) / last_vwap) * 100
     df['Momentum'] = df['Close'].pct_change(5) * 100
-    return df, deviation_pct
+    return df, ((df['Close'].iloc[-1] - df['VWAP'].iloc[-1]) / df['VWAP'].iloc[-1]) * 100
 
-def generate_signal(df, deviation):
-    if df is None: return "⚪ NO SIGNAL"
-    last_mom = df['Momentum'].iloc[-1]
-    if deviation > 0.3 and last_mom > 0: return "🟢 STRONG LONG"
-    elif deviation < -0.3 and last_mom < 0: return "🔴 STRONG SHORT"
-    else: return "🟡 NEUTRAL"
-
-# --- 5. MAIN INTERFACE ---
+# --- 6. MAIN INTERFACE ---
 st.title("🚀 NQ & ES Quantitative Trading Platform")
-asset_map = {"NQ=F (Nasdaq)": "NQ=F", "ES=F (S&P 500)": "ES=F"}
-target_label = st.selectbox("Select Market Asset", list(asset_map.keys()))
-target_symbol = asset_map[target_label]
+col1, col2 = st.columns([3, 1])
+with col1: st.subheader(f"Current Target: {target_label}")
+with col2: st.metric("Alpha RS Lead (NQ/ES)", f"{rs_lead:+.2f}%")
 
 @st.fragment(run_every=60)
 def main_monitor():
     try:
         df = yf.download(target_symbol, period="2d", interval="5m", progress=False, multi_level_index=False)
         metrics_data = calculate_vwap_metrics(df)
-        
         if metrics_data:
             df, dev = metrics_data
-            last_p = df['Close'].iloc[-1]
-            last_atr = df['ATR'].iloc[-1]
-            
-            # Risk Logic
+            last_p, last_atr = df['Close'].iloc[-1], df['ATR'].iloc[-1]
             stop_dist = max(last_atr * 0.5, 0.25)
-            risk_amt = account_size * risk_pct
-            tick_value = 20 if "NQ" in target_symbol else 50
-            suggested_contracts = max(1, int(risk_amt / (stop_dist * tick_value)))
+            risk_amt, tick_val = account_size * risk_pct, (20 if "NQ" in target_symbol else 50)
+            suggested_size = max(1, int(risk_amt / (stop_dist * tick_val)))
             
-            target_price = last_p + (stop_dist * target_rr) if dev > 0 else last_p - (stop_dist * target_rr)
-            stop_price = last_p - stop_dist if dev > 0 else last_p + stop_dist
-            signal = generate_signal(df, dev)
+            # Logic & Signals
+            score = (1 if dev > 0.3 else -1 if dev < -0.3 else 0) + (1 if df['Momentum'].iloc[-1] > 0 else -1 if df['Momentum'].iloc[-1] < 0 else 0)
+            signal = "🟢 STRONG LONG" if score >= 2 else "🔴 STRONG SHORT" if score <= -2 else "🟡 NEUTRAL"
+            target_p = last_p + (stop_dist * 2.0) if score > 0 else last_p - (stop_dist * 2.0)
+            stop_p = last_p - stop_dist if score > 0 else last_p + stop_dist
 
-            # METRICS DISPLAY
-            m1, m2, m3, m4 = st.columns(4)
-            with m1: st.metric("Current Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
-            with m2: st.metric("Signal", signal)
-            with m3: st.metric("Size", f"{suggested_contracts} Contracts")
-            with m4:
-                win_rate = (st.session_state.wins / (st.session_state.wins + st.session_state.losses) * 100) if (st.session_state.wins + st.session_state.losses) > 0 else 0
-                st.metric("Win Rate", f"{win_rate:.1f}%")
+            # DASHBOARD
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
+            m2.metric("Signal", signal); m3.metric("Suggested Size", f"{suggested_size} Contracts")
 
             # CHART
             fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
-            fig.add_hline(y=target_price, line_dash="dot", line_color="green", annotation_text="Target")
-            fig.add_hline(y=stop_price, line_dash="dot", line_color="red", annotation_text="Stop")
-            fig.update_layout(height=450, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=30,b=0))
+            fig.add_hline(y=target_p, line_dash="dot", line_color="green", annotation_text="Target")
+            fig.add_hline(y=stop_p, line_dash="dot", line_color="red", annotation_text="Stop")
+            fig.update_layout(height=450, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=40,b=0))
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- PREDICTION BUTTON RESTORED ---
+            # AI VERDICT
             st.divider()
-            if st.button("🤖 Generate AI Prediction Verdict", use_container_width=True):
-                if not active_google_key: st.warning("Add Google Key in Sidebar")
+            if st.button("🧠 Generate AI Prediction Verdict", use_container_width=True, type="primary"):
+                if not active_google_key: st.error("Add Gemini Key")
                 else:
                     client = genai.Client(api_key=active_google_key)
-                    prompt = f"""
-                    AI Verdict for {target_label}:
-                    - Technical: {signal} | VWAP Dev: {dev:.2f}% | ATR: {last_atr:.2f}
-                    - Context: VIX {vix:.1f} | Tech {sectors.get('Tech (XLK)', 0):.2f}%
-                    
-                    1. Confidence %
-                    2. 5-Tier Verdict (Strong/Weak Short, Wait, Strong/Weak Long)
-                    3. Technical Alignment breakdown.
-                    """
-                    response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-                    st.info("### 🤖 AI Prediction Analysis")
-                    st.markdown(response.text)
+                    prompt = f"Analyze {target_label}: Price ${last_p}, Signal {signal}, Dev {dev:.2f}%, RS {rs_lead:+.2f}%. Verdict/Confidence."
+                    resp = client.models.generate_content(model='gemini-2.0-flash-exp', contents=prompt)
+                    st.info(f"### 🎯 AI Verdict\n{resp.text}")
 
-            # LOGGING
-            st.subheader("📊 Trade Management")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("✅ HIT TARGET", use_container_width=True):
-                    st.session_state.wins += 1; st.session_state.total_pnl += (risk_amt * target_rr); st.balloons()
-            with c2:
-                if st.button("❌ HIT STOP", use_container_width=True):
-                    st.session_state.losses += 1; st.session_state.total_pnl -= risk_amt
+            # EXECUTION
+            st.divider()
+            ex1, ex2 = st.columns(2)
+            if ex1.button("✅ HIT TARGET", use_container_width=True, type="primary"):
+                st.session_state.wins += 1; st.session_state.total_pnl += (risk_amt * 2.0); st.balloons()
+            if ex2.button("❌ HIT STOP", use_container_width=True):
+                st.session_state.losses += 1; st.session_state.total_pnl -= risk_amt
+            st.write(f"**Session:** Wins: {st.session_state.wins} | P&L: `${st.session_state.total_pnl:+,.2f}`")
 
-    except Exception as e: st.error(f"System Error: {e}")
+    except Exception as e: st.error(f"⚠️ Error: {str(e)}")
 
 main_monitor()
