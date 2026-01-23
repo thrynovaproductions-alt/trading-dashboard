@@ -18,7 +18,6 @@ if 'error_strikes' not in st.session_state:
 
 # --- 2. ANALYTICS & AI ENGINE ---
 def get_full_ai_report(label, last_p, dev, atr, rsi, vix, tnx, tech, defen, fin, conf, api_key):
-    """Restored 11-parameter structured analyst"""
     try:
         client = genai.Client(api_key=api_key)
         prompt = f"""Elite Report for {label} (${last_p:.2f}). Conf: {conf:.0f}%. VIX: {vix:.1f}. RSI: {rsi:.1f}. 
@@ -29,7 +28,6 @@ def get_full_ai_report(label, last_p, dev, atr, rsi, vix, tnx, tech, defen, fin,
     except Exception as e: return f"AI Error: {e}"
 
 def capture_pattern(df, reason):
-    """Saves a snapshot for Visual Memory"""
     fig = go.Figure(data=[go.Candlestick(x=df.index[-30:], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
     fig.update_layout(template="plotly_dark", showlegend=False, margin=dict(l=5, r=5, t=5, b=5), height=150)
     snapshot = {"time": datetime.now().strftime("%H:%M"), "fig": fig, "reason": reason, "price": df['Close'].iloc[-1]}
@@ -53,7 +51,6 @@ target_sym = st.sidebar.selectbox("Asset", ["NQ=F", "ES=F"])
 
 data_pulse, sects, vix, tnx, rs_lead, is_clean = fetch_pulse(target_sym)
 
-# Auto-Healing Shield
 if not is_clean:
     st.session_state.error_strikes += 1
     if st.session_state.error_strikes >= 3:
@@ -70,42 +67,34 @@ def main_monitor():
     df = yf.download(target_sym, period="2d", interval="5m", progress=False)
     if df.empty: return
 
-    # VWAP Calculation
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
-    # --- FIXED INDEXING: GRABS LATEST VALUES ONLY ---
-    last_p = df['Close'].iloc[-1]
-    last_vol = df['Volume'].iloc[-1]
-    last_vwap = df['VWAP'].iloc[-1]
+    # --- HARDENED INDEXING FOR LINE 95 ---
+    last_p = float(df['Close'].iloc[-1])
+    last_vol = int(df['Volume'].iloc[-1])
+    last_vwap = float(df['VWAP'].iloc[-1])
     dev = ((last_p - last_vwap) / last_vwap) * 100
     
-    # RSI Calculation
     delta = df['Close'].diff()
     g = delta.where(delta > 0, 0).rolling(14).mean()
     l = -delta.where(delta < 0, 0).rolling(14).mean()
-    rsi_series = 100 - (100 / (1 + (g / l)))
-    rsi = rsi_series.iloc[-1]
+    rsi_val = float((100 - (100 / (1 + (g / l)))).iloc[-1])
     
-    # Weighted Confidence Score
-    conf = (max(0, 100-(vix*2.5))*0.4) + (rsi*0.3) + (min(100, 50+(rs_lead*10))*0.3)
+    conf = (max(0, 100-(vix*2.5))*0.4) + (rsi_val*0.3) + (min(100, 50+(rs_lead*10))*0.3)
 
-    # UI Metrics (TypeError Fix: Line 95 Re-Verified)
     m1, m2, m3 = st.columns(3)
     m1.metric("Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
     m2.metric("Confidence", f"{conf:.0f}%")
-    m3.metric("RSI", f"{rsi:.1f}")
+    m3.metric("RSI", f"{rsi_val:.1f}")
     
-    # Main Chart Overlay
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
     fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Visual Memory Triggers
     if last_vol > 1000: capture_pattern(df, "Volume Climax")
 
-    # Visual Memory Sidebar/Footer
     if st.session_state.pattern_memory:
         st.divider(); st.subheader("🧠 Visual Pattern Memory")
         cols = st.columns(3)
@@ -114,13 +103,12 @@ def main_monitor():
                 st.caption(f"🕒 {snap['time']} | {snap['reason']}")
                 st.plotly_chart(snap['fig'], use_container_width=True, key=f"mem_{i}")
 
-    # Report Engine
     if st.button("🧠 Generate Full Prediction Report", use_container_width=True, type="primary"):
         if not key: st.error("Add Gemini Key")
         else:
             with st.spinner("Analyzing..."):
-                atr = (df['High'].rolling(14).max() - df['Low'].rolling(14).min()).iloc[-1]
-                report = get_full_ai_report(target_sym, last_p, dev, atr, rsi, vix, tnx, sects['Tech'], sects['Def'], sects['Fin'], conf, key)
+                atr = float((df['High'].rolling(14).max() - df['Low'].rolling(14).min()).iloc[-1])
+                report = get_full_ai_report(target_sym, last_p, dev, atr, rsi_val, vix, tnx, sects['Tech'], sects['Def'], sects['Fin'], conf, key)
                 st.info("### 🎯 AI Quantitative Prediction Report")
                 st.markdown(report)
 
