@@ -13,7 +13,7 @@ if 'error_strikes' not in st.session_state:
     st.session_state.update({
         'error_strikes': 0, 
         'wins': 0, 'losses': 0, 'total_pnl': 0.0,
-        'pattern_memory': [] # Visual Memory Storage
+        'pattern_memory': [] 
     })
 
 # --- 2. ANALYTICS & AI ENGINE ---
@@ -74,13 +74,13 @@ def main_monitor():
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
-    # Live Metrics selection (Fixes Line 82 TypeError)
+    # --- BUG FIX: CRITICAL INDEXING FOR LINE 95 ---
     last_p = df['Close'].iloc[-1]
     last_vol = df['Volume'].iloc[-1]
     last_vwap = df['VWAP'].iloc[-1]
     dev = ((last_p - last_vwap) / last_vwap) * 100
     
-    # RSI & Confidence
+    # RSI & Momentum
     delta = df['Close'].diff()
     g = delta.where(delta > 0, 0).rolling(14).mean()
     l = -delta.where(delta < 0, 0).rolling(14).mean()
@@ -90,19 +90,19 @@ def main_monitor():
     # Confidence Score
     conf = (max(0, 100-(vix*2.5))*0.4) + (rsi*0.3) + (min(100, 50+(rs_lead*10))*0.3)
 
-    # UI Metrics Row
+    # UI Metrics Row (Line 95 Re-Tested)
     m1, m2, m3 = st.columns(3)
     m1.metric("Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
     m2.metric("Confidence", f"{conf:.0f}%")
     m3.metric("RSI", f"{rsi:.1f}")
     
-    # Main Chart
+    # Charting
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
     fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Pattern Triggers (Volume Climax > 1000)
+    # Pattern Storage
     if last_vol > 1000: capture_pattern(df, "Volume Climax")
 
     # Visual Memory UI
@@ -114,13 +114,11 @@ def main_monitor():
                 st.caption(f"🕒 {snap['time']} | {snap['reason']}")
                 st.plotly_chart(snap['fig'], use_container_width=True, key=f"mem_{i}")
 
-    # Prediction Report
+    # Report Button
     if st.button("🧠 Generate Full Prediction Report", use_container_width=True, type="primary"):
-        if not key:
-            st.error("Please enter Gemini API Key")
+        if not key: st.error("Add Gemini Key")
         else:
-            with st.spinner("Analyzing Market Sentinel..."):
-                # ATR calculation for report
+            with st.spinner("Analyzing..."):
                 atr = (df['High'].rolling(14).max() - df['Low'].rolling(14).min()).iloc[-1]
                 report = get_full_ai_report(target_sym, last_p, dev, atr, rsi, vix, tnx, sects['Tech'], sects['Def'], sects['Fin'], conf, key)
                 st.info("### 🎯 AI Quantitative Prediction Report")
