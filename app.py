@@ -20,7 +20,7 @@ st.sidebar.subheader("🔌 AI Authentication")
 google_key_input = st.sidebar.text_input("Google AI Key:", type="password")
 active_google_key = google_key_input if google_key_input else st.secrets.get("GEMINI_API_KEY", "")
 
-# Multi-Timeframe Trend (Free Engine)
+# Multi-Timeframe Trend
 st.sidebar.divider()
 st.sidebar.subheader("Multi-Timeframe Trend")
 asset_map = {"NQ=F (Nasdaq)": "NQ=F", "ES=F (S&P 500)": "ES=F"}
@@ -73,7 +73,7 @@ def monitor_market():
 
         st.subheader(f"Current Signal: {sig_str} | Price: {last_price:.2f}")
 
-        # Restored Cyan VWAP Chart
+        # Restored Chart
         fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price")])
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
         fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
