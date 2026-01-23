@@ -18,7 +18,7 @@ if 'error_strikes' not in st.session_state:
 
 # --- 2. ANALYTICS & AI ENGINE ---
 def get_full_ai_report(label, last_p, dev, atr, rsi, vix, tnx, tech, defen, fin, conf, api_key):
-    """Corrected 11-parameter structured analyst"""
+    """Restored 11-parameter structured analyst"""
     try:
         client = genai.Client(api_key=api_key)
         prompt = f"""Elite Report for {label} (${last_p:.2f}). Conf: {conf:.0f}%. VIX: {vix:.1f}. RSI: {rsi:.1f}. 
@@ -51,9 +51,9 @@ st.sidebar.title("🛡️ Risk Management")
 key = st.sidebar.text_input("Gemini API Key:", type="password")
 target_sym = st.sidebar.selectbox("Asset", ["NQ=F", "ES=F"])
 
-data, sects, vix, tnx, rs_lead, is_clean = fetch_pulse(target_sym)
+data_pulse, sects, vix, tnx, rs_lead, is_clean = fetch_pulse(target_sym)
 
-# Auto-Healing
+# Auto-Healing Shield
 if not is_clean:
     st.session_state.error_strikes += 1
     if st.session_state.error_strikes >= 3:
@@ -74,38 +74,38 @@ def main_monitor():
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
-    # --- BUG FIX: CRITICAL INDEXING FOR LINE 95 ---
+    # --- FIXED INDEXING: GRABS LATEST VALUES ONLY ---
     last_p = df['Close'].iloc[-1]
     last_vol = df['Volume'].iloc[-1]
     last_vwap = df['VWAP'].iloc[-1]
     dev = ((last_p - last_vwap) / last_vwap) * 100
     
-    # RSI & Momentum
+    # RSI Calculation
     delta = df['Close'].diff()
     g = delta.where(delta > 0, 0).rolling(14).mean()
     l = -delta.where(delta < 0, 0).rolling(14).mean()
     rsi_series = 100 - (100 / (1 + (g / l)))
     rsi = rsi_series.iloc[-1]
     
-    # Confidence Score
+    # Weighted Confidence Score
     conf = (max(0, 100-(vix*2.5))*0.4) + (rsi*0.3) + (min(100, 50+(rs_lead*10))*0.3)
 
-    # UI Metrics Row (Line 95 Re-Tested)
+    # UI Metrics (TypeError Fix: Line 95 Re-Verified)
     m1, m2, m3 = st.columns(3)
     m1.metric("Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
     m2.metric("Confidence", f"{conf:.0f}%")
     m3.metric("RSI", f"{rsi:.1f}")
     
-    # Charting
+    # Main Chart Overlay
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
     fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Pattern Storage
+    # Visual Memory Triggers
     if last_vol > 1000: capture_pattern(df, "Volume Climax")
 
-    # Visual Memory UI
+    # Visual Memory Sidebar/Footer
     if st.session_state.pattern_memory:
         st.divider(); st.subheader("🧠 Visual Pattern Memory")
         cols = st.columns(3)
@@ -114,7 +114,7 @@ def main_monitor():
                 st.caption(f"🕒 {snap['time']} | {snap['reason']}")
                 st.plotly_chart(snap['fig'], use_container_width=True, key=f"mem_{i}")
 
-    # Report Button
+    # Report Engine
     if st.button("🧠 Generate Full Prediction Report", use_container_width=True, type="primary"):
         if not key: st.error("Add Gemini Key")
         else:
