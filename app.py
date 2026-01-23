@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from google import genai
-from google.genai import types
-from datetime import datetime
 import yfinance as yf
+from google import genai
+from datetime import datetime
 
 # --- 1. CORE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="NQ & ES Global Sentinel", initial_sidebar_state="collapsed")
@@ -14,71 +12,69 @@ st.set_page_config(layout="wide", page_title="NQ & ES Global Sentinel", initial_
 # --- 2. PERSISTENT STATE ---
 if 'wins' not in st.session_state: st.session_state.wins = 0
 if 'losses' not in st.session_state: st.session_state.losses = 0
+if 'trade_log' not in st.session_state: st.session_state.trade_log = []
 
-# --- 3. SIDEBAR: GLOBAL SENTINEL & SECTOR BREADTH ---
+# --- 3. SIDEBAR: SENTINEL & REPORTING ---
 st.sidebar.title("⚠️ Systemic Risk Monitor")
-active_google_key = st.secrets.get("GEMINI_API_KEY", "")
+
+# Report Generator
+st.sidebar.subheader("📊 Performance Reporting")
+if st.sidebar.button("Generate EOD Report", use_container_width=True):
+    if st.session_state.trade_log:
+        df_log = pd.DataFrame(st.session_state.trade_log)
+        csv = df_log.to_csv(index=False).encode('utf-8')
+        st.sidebar.download_button("📥 Download CSV", data=csv, file_name=f"EOD_Report_{datetime.now().date()}.csv")
+    else:
+        st.sidebar.warning("No trades logged yet.")
+
+if st.sidebar.button("Reset Session", use_container_width=True):
+    st.session_state.wins = 0; st.session_state.losses = 0; st.session_state.trade_log = []
 
 # Sector Breadth Tracker
-st.sidebar.subheader("Sector Breadth (Real-Time)")
+st.sidebar.divider()
+st.sidebar.subheader("Sector Breadth")
 def get_sector_data():
-    sectors = {
-        "Tech (XLK)": "XLK",
-        "Finance (XLF)": "XLF",
-        "Energy (XLE)": "XLE",
-        "Defensive (XLU)": "XLU"
-    }
+    sectors = {"Tech (XLK)": "XLK", "Defensive (XLU)": "XLU"}
     results = {}
     for name, ticker in sectors.items():
         try:
-            d = yf.download(ticker, period="1d", interval="5m", progress=False)
-            change = ((d['Close'].iloc[-1] - d['Close'].iloc[0]) / d['Close'].iloc[0]) * 100
-            results[name] = change
+            d = yf.download(ticker, period="1d", interval="5m", progress=False, multi_level_index=False)
+            results[name] = ((d['Close'].iloc[-1] - d['Close'].iloc[0]) / d['Close'].iloc[0]) * 100
         except: results[name] = 0.0
     return results
 
 sector_perf = get_sector_data()
-for name, perf in sector_perf.items():
-    st.sidebar.metric(name, f"{perf:.2f}%", delta=f"{perf:.2f}%")
-
-# Global Macro Sentinel
-st.sidebar.divider()
-st.sidebar.subheader("🌍 Global Macro Sentinel")
-def get_macro_data():
-    tickers = ["^TNX", "CL=F", "GC=F", "DX=F"]
-    data = yf.download(tickers, period="1d", interval="15m", progress=False)['Close']
-    latest = data.iloc[-1]
-    return latest["^TNX"], latest["CL=F"], latest["GC=F"], latest["DX=F"]
-
-tnx_p, oil_p, gold_p, dxy_p = get_macro_data()
-st.sidebar.metric("10Y Yield", f"{tnx_p:.2f}%")
-st.sidebar.metric("US Dollar", f"{dxy_p:.2f}")
+st.sidebar.metric("Tech (XLK)", f"{sector_perf.get('Tech (XLK)', 0):.2f}%")
+st.sidebar.metric("Defensive (XLU)", f"{sector_perf.get('Defensive (XLU)', 0):.2f}%")
 
 # Asset Selection
 asset_map = {"NQ=F (Nasdaq)": "NQ=F", "ES=F (S&P 500)": "ES=F"}
 target_label = st.sidebar.selectbox("Market Asset", list(asset_map.keys()))
 target_symbol = asset_map[target_label]
 
-# --- 4. PREDICTIVE HEADER (SHADOW + BREADTH) ---
+# --- 4. PREDICTIVE HEADER & REAL-TIME METRICS ---
 st.title(f"🚀 {target_label} Global Sentinel")
 
 def get_realtime_metrics(target):
     shadow_ticker = "QQQ" if "NQ" in target else "SPY"
-    s_data = yf.download(shadow_ticker, period="1d", interval="1m", progress=False)
-    vix_p = yf.download("^VIX", period="1d", interval="1m", progress=False)['Close'].iloc[-1]
-    s_price = s_data['Close'].iloc[-1]
-    speed = (s_data['Close'].iloc[-1] - s_data['Close'].iloc[-5])
-    return s_price, shadow_ticker, vix_p, speed
+    try:
+        s_data = yf.download(shadow_ticker, period="1d", interval="1m", progress=False, multi_level_index=False)
+        vix_data = yf.download("^VIX", period="1d", interval="1m", progress=False, multi_level_index=False)
+        tnx_data = yf.download("^TNX", period="1d", interval="1m", progress=False, multi_level_index=False)
+        
+        s_price = float(s_data['Close'].iloc[-1])
+        vix_price = float(vix_data['Close'].iloc[-1])
+        tnx_price = float(tnx_data['Close'].iloc[-1])
+        speed = float(s_data['Close'].iloc[-1] - s_data['Close'].iloc[-5])
+        return s_price, shadow_ticker, vix_price, tnx_price, speed
+    except: return 0.0, shadow_ticker, 0.0, 0.0, 0.0
 
-shadow_p, shadow_n, vix_p, mkt_speed = get_realtime_metrics(target_symbol)
+shadow_p, shadow_n, vix_p, tnx_p, mkt_speed = get_realtime_metrics(target_symbol)
 
 c1, c2, c3 = st.columns(3)
 with c1: st.metric(f"Shadow {shadow_n}", f"${shadow_p:.2f}", delta=f"{mkt_speed:.2f}")
-with c2: st.metric("VIX", f"{vix_p:.2f}", delta_color="inverse")
-with c3:
-    # Logic: If Tech is leading, it's Risk-On. If Defensive is leading, it's Risk-Off
-    internal_bias = "RISK-ON 🚀" if sector_perf["Tech (XLK)"] > sector_perf["Defensive (XLU)"] else "DEFENSIVE 🛡️"
-    st.subheader(f"Internal Bias: {internal_bias}")
+with c2: st.metric("VIX", f"{vix_p:.2f}", delta="Risk Filter", delta_color="inverse")
+with c3: st.metric("10Y Yield", f"{tnx_p:.2f}%")
 
 # --- 5. THE MONITOR & SIGNAL ENGINE ---
 @st.fragment(run_every=60)
@@ -101,29 +97,31 @@ def monitor_market():
 
 market_d = monitor_market()
 
-# --- 6. THE DEEP BREADTH VERDICT ---
+# --- 6. LOGGING & PERFORMANCE ---
 st.divider()
-if st.button("Analyze Global Macro Verdict", use_container_width=True):
-    if not active_google_key: st.warning("Enter Google AI Key.")
-    elif market_d:
-        client = genai.Client(api_key=active_google_key)
-        prompt = f"""
-        Analyze {target_label}:
-        - Technical: {market_d['signal']} @ {market_d['price']}
-        - Sector Breadth: {sector_perf}
-        - Macro Sentinel: Yields {tnx_p}%, DXY {dxy_p}, Oil ${oil_p}
-        - Real-Time Shadow: {shadow_p} | VIX {vix_p} | Speed {mkt_speed}
-        
-        Verdict Criteria:
-        1. Sector Quality: Is this move led by Tech or Defensive rotation?
-        2. Macro Alignment: Do Yields/DXY support the signal?
-        3. Predictive Lag: Is the real-time Shadow ETF confirming the delayed Signal?
-        """
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-        st.info("🤖 Deep Breadth AI Verdict"); st.markdown(response.text)
-
 c1, c2 = st.columns(2)
+
+def log_trade(result):
+    if market_d:
+        st.session_state.trade_log.append({
+            "Time": datetime.now().strftime("%H:%M:%S"),
+            "Asset": target_label,
+            "Price": market_d['price'],
+            "Signal": market_d['signal'],
+            "Result": result,
+            "VIX": vix_p,
+            "Yield": tnx_p,
+            "Tech_Bias": sector_perf.get("Tech (XLK)", 0)
+        })
+
 with c1:
-    if st.button("✅ HIT TARGET", use_container_width=True): st.session_state.wins += 1; st.balloons()
+    if st.button("✅ HIT TARGET", use_container_width=True):
+        st.session_state.wins += 1
+        log_trade("WIN")
+        st.balloons()
 with c2:
-    if st.button("❌ HIT STOP-LOSS", use_container_width=True): st.session_state.losses += 1
+    if st.button("❌ HIT STOP-LOSS", use_container_width=True):
+        st.session_state.losses += 1
+        log_trade("LOSS")
+
+st.sidebar.metric("Win Rate", f"{(st.session_state.wins/(st.session_state.wins+st.session_state.losses)*100 if (st.session_state.wins+st.session_state.losses)>0 else 0):.1f}%")
