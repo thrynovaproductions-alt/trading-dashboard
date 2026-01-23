@@ -60,7 +60,7 @@ if not is_clean:
         st.cache_data.clear(); st.session_state.error_strikes = 0; st.rerun()
     st.sidebar.error(f"⚠️ Sync Lag ({st.session_state.error_strikes}/3)")
 else:
-    st.sidebar.success("✅ Data Integrity: 100%")
+    st.session_state.error_strikes = 0; st.sidebar.success("✅ Data Integrity: 100%")
 
 # --- 4. MAIN MONITOR ---
 st.title("🚀 NQ & ES Quantitative Trading Platform")
@@ -68,22 +68,41 @@ st.title("🚀 NQ & ES Quantitative Trading Platform")
 @st.fragment(run_every=60)
 def main_monitor():
     df = yf.download(target_sym, period="2d", interval="5m", progress=False)
+    if df.empty: return
+
+    # VWAP Calculation
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
-    last_p, last_vol = df['Close'].iloc[-1], df['Volume'].iloc[-1]
+    
+    # Live Metrics selection (Fixes Line 82 TypeError)
+    last_p = df['Close'].iloc[-1]
+    last_vol = df['Volume'].iloc[-1]
+    last_vwap = df['VWAP'].iloc[-1]
+    dev = ((last_p - last_vwap) / last_vwap) * 100
     
     # RSI & Confidence
-    delta = df['Close'].diff(); g = delta.where(delta > 0, 0).rolling(14).mean(); l = -delta.where(delta < 0, 0).rolling(14).mean()
-    rsi = 100 - (100 / (1 + (g / l))).iloc[-1]
+    delta = df['Close'].diff()
+    g = delta.where(delta > 0, 0).rolling(14).mean()
+    l = -delta.where(delta < 0, 0).rolling(14).mean()
+    rsi_series = 100 - (100 / (1 + (g / l)))
+    rsi = rsi_series.iloc[-1]
+    
+    # Confidence Score
     conf = (max(0, 100-(vix*2.5))*0.4) + (rsi*0.3) + (min(100, 50+(rs_lead*10))*0.3)
 
-    # UI Metrics & Chart
+    # UI Metrics Row
     m1, m2, m3 = st.columns(3)
-    m1.metric("Price", f"${last_p:.2f}"); m2.metric("Confidence", f"{conf:.0f}%"); m3.metric("RSI", f"{rsi:.1f}")
+    m1.metric("Price", f"${last_p:.2f}", f"{dev:+.2f}% VWAP")
+    m2.metric("Confidence", f"{conf:.0f}%")
+    m3.metric("RSI", f"{rsi:.1f}")
     
-    st.plotly_chart(go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])]).update_layout(template="plotly_dark", xaxis_rangeslider_visible=False))
+    # Main Chart
+    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+    fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='cyan', dash='dash'), name="VWAP"))
+    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Pattern Triggers
+    # Pattern Triggers (Volume Climax > 1000)
     if last_vol > 1000: capture_pattern(df, "Volume Climax")
 
     # Visual Memory UI
@@ -95,9 +114,16 @@ def main_monitor():
                 st.caption(f"🕒 {snap['time']} | {snap['reason']}")
                 st.plotly_chart(snap['fig'], use_container_width=True, key=f"mem_{i}")
 
+    # Prediction Report
     if st.button("🧠 Generate Full Prediction Report", use_container_width=True, type="primary"):
-        report = get_full_ai_report(target_sym, last_p, 0.0, 0.0, rsi, vix, tnx, sects['Tech'], sects['Def'], sects['Fin'], conf, key)
-        st.info("### 🎯 AI Quantitative Prediction Report")
-        st.markdown(report)
+        if not key:
+            st.error("Please enter Gemini API Key")
+        else:
+            with st.spinner("Analyzing Market Sentinel..."):
+                # ATR calculation for report
+                atr = (df['High'].rolling(14).max() - df['Low'].rolling(14).min()).iloc[-1]
+                report = get_full_ai_report(target_sym, last_p, dev, atr, rsi, vix, tnx, sects['Tech'], sects['Def'], sects['Fin'], conf, key)
+                st.info("### 🎯 AI Quantitative Prediction Report")
+                st.markdown(report)
 
 main_monitor()
